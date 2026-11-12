@@ -4,7 +4,10 @@ import org.lwjgl.glfw.GLFW;
 import org.lwjgl.glfw.GLFWErrorCallback;
 import org.lwjgl.glfw.GLFWVidMode;
 import org.lwjgl.opengl.GL;
+import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
+
+import java.nio.DoubleBuffer;
 
 /**
  * Creates and owns a GLFW window with an OpenGL 3.3 core context.
@@ -76,6 +79,20 @@ public final class Window {
 
     public boolean isKeyPressed(int key) {
         return GLFW.glfwGetKey(handle, key) == GLFW.GLFW_PRESS;
+    }
+
+    public boolean isMouseButtonPressed(int button) {
+        return GLFW.glfwGetMouseButton(handle, button) == GLFW.GLFW_PRESS;
+    }
+
+    /** Cursor position in window pixels, origin at the top-left corner. */
+    public double[] cursorPos() {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            DoubleBuffer x = stack.mallocDouble(1);
+            DoubleBuffer y = stack.mallocDouble(1);
+            GLFW.glfwGetCursorPos(handle, x, y);
+            return new double[]{x.get(0), y.get(0)};
+        }
     }
 
     public void setCursorDisabled(boolean disabled) {

@@ -82,7 +82,16 @@ public final class Camera {
         }
     }
 
-    private Vector3f frontVector() {
+    /**
+     * Call after the cursor is re-captured (e.g. a menu closed) so the camera
+     * does not snap to the new cursor position.
+     */
+    public void resetMouseLook() {
+        firstMouse = true;
+    }
+
+    /** Unit vector the camera is currently looking along. */
+    public Vector3f frontVector() {
         double yawRad = Math.toRadians(yaw);
         double pitchRad = Math.toRadians(pitch);
         return new Vector3f(

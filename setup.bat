@@ -71,6 +71,41 @@ call :fetch "org/lwjgl/lwjgl-stb/%LWJGL%/lwjgl-stb-%LWJGL%.jar"                 
 call :fetch "org/lwjgl/lwjgl-stb/%LWJGL%/lwjgl-stb-%LWJGL%-natives-windows.jar"             "lwjgl-stb-%LWJGL%-natives-windows.jar"
 call :fetch "org/joml/joml/%JOML%/joml-%JOML%.jar"                                          "joml-%JOML%.jar"
 
+REM ---------- 3b. JLayer (mp3 playback) ----------
+echo.
+echo [3b/4] JLayer (mp3 playback)...
+set "JL_OK="
+
+if exist "lib\jlayer-1.0.1.4.jar" (
+    echo   [skip] jlayer-1.0.1.4.jar ^(already present^)
+    set "JL_OK=1"
+)
+if defined JL_OK goto :jlayer_done
+
+if exist "lib\jlayer-1.0.1.jar" (
+    echo   [skip] jlayer-1.0.1.jar ^(already present^)
+    set "JL_OK=1"
+)
+if defined JL_OK goto :jlayer_done
+
+call :jl_try "https://repo1.maven.org/maven2/com/googlecode/soundlibs/jlayer/1.0.1.4/jlayer-1.0.1.4.jar" "jlayer-1.0.1.4.jar"
+if defined JL_OK goto :jlayer_done
+
+call :jl_try "https://repo.maven.apache.org/maven2/com/googlecode/soundlibs/jlayer/1.0.1.4/jlayer-1.0.1.4.jar" "jlayer-1.0.1.4.jar"
+if defined JL_OK goto :jlayer_done
+
+call :jl_try "https://maven.aliyun.com/repository/central/com/googlecode/soundlibs/jlayer/1.0.1.4/jlayer-1.0.1.4.jar" "jlayer-1.0.1.4.jar"
+if defined JL_OK goto :jlayer_done
+
+call :jl_try "https://repo1.maven.org/maven2/javazoom/jlayer/1.0.1/jlayer-1.0.1.jar" "jlayer-1.0.1.jar"
+
+:jlayer_done
+if not defined JL_OK (
+    echo   [WARN] JLayer could not be downloaded.
+    echo          The game will still BUILD and RUN, just silently.
+    echo          Fix later with:  download-jlayer.bat
+)
+
 REM ---------- 4. Проверка результата ----------
 echo.
 echo [4/4] Verifying downloaded files...
@@ -132,7 +167,7 @@ exit /b 0
 
 REM ------------------------------------------------------------------
 REM  :fetch <relative-path> <filename>
-REM  Tries PRIMARY, then FALLBACK mirror. Aborts on failure.
+REM  Tries PRIMARY, then FALLBACK mirror.
 REM ------------------------------------------------------------------
 :fetch
 set "REL=%~1"
@@ -166,4 +201,31 @@ if not errorlevel 1 (
 
 if exist "%DEST%.tmp" del "%DEST%.tmp" >nul 2>nul
 echo   [FAIL] %NAME%
+exit /b 0
+
+REM ------------------------------------------------------------------
+REM  :jl_try <url> <filename>
+REM  Sets JL_OK when the jar was downloaded and is not a 404 stub.
+REM ------------------------------------------------------------------
+:jl_try
+set "JURL=%~1"
+set "JNAME=%~2"
+
+echo   [get ] %JNAME%
+curl -L --fail --silent --show-error --retry 2 --retry-delay 1 --connect-timeout 15 -o "lib\jl.tmp" "%JURL%"
+if errorlevel 1 (
+    if exist "lib\jl.tmp" del "lib\jl.tmp" >nul 2>nul
+    exit /b 0
+)
+
+for %%S in ("lib\jl.tmp") do set "JSZ=%%~zS"
+if not defined JSZ exit /b 0
+if %JSZ% LSS 5000 (
+    del "lib\jl.tmp" >nul 2>nul
+    exit /b 0
+)
+
+move /y "lib\jl.tmp" "lib\%JNAME%" >nul
+set "JL_OK=1"
+echo   [ ok ] %JNAME% ^(%JSZ% bytes^)
 exit /b 0

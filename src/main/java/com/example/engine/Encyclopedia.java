@@ -6,6 +6,8 @@ import java.util.List;
 /**
  * In-game encyclopedia. Displays a list of characters (Person objects).
  * Navigate with Up / Down arrow keys while open.
+ *
+ * Open / close with TAB (Q is reserved for spawning).
  */
 public final class Encyclopedia {
     private boolean open = false;
@@ -14,7 +16,7 @@ public final class Encyclopedia {
 
     private final UiTexture titleTexture;
     private final UiTexture hintTexture;
-    
+
     private UiTexture currentNameTex = null;
     private UiTexture currentDescTex = null;
     private int lastRenderedIndex = -1;
@@ -24,7 +26,7 @@ public final class Encyclopedia {
         titleTexture = TextRenderer.createText(
                 "ЭНЦИКЛОПЕДИЯ ОБИТАТЕЛЕЙ", 30, 760, new Color(255, 220, 110));
         hintTexture = TextRenderer.createText(
-                "Стрелки Вверх/Вниз — листать. Q — закрыть.", 16, 400, new Color(150, 155, 170));
+                "Стрелки Вверх/Вниз — листать. TAB — закрыть.", 16, 400, new Color(150, 155, 170));
     }
 
     public void toggle() {
