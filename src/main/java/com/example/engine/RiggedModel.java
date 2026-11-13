@@ -17,10 +17,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 
+/**
+ * Procedurally rigged model.
+ * Arms are brought down from T-pose by `armDropAngle` radians around Z.
+ * Legs rotate around X to simulate walking.
+ */
 public final class RiggedModel {
 
     private static final float NECK_FRAC     = 0.85f;
     private static final float HIP_FRAC      = 0.48f;
+    private static final float SHOULDER_FRAC = 0.80f;
     private static final float LEG_PIVOT_FRAC = 0.08f;
 
     private final List<Part> parts = new ArrayList<>();
@@ -29,7 +35,6 @@ public final class RiggedModel {
     private float scale;
     private final float armCutFrac;
     private final float armDropAngle;
-    private final float shoulderFrac; // <-- НОВЫЙ ПАРАМЕТР
     
     private final Random rng;
     private final Vector3f target = new Vector3f();
@@ -45,24 +50,19 @@ public final class RiggedModel {
     }
 
     public RiggedModel(String objPath, String texPath, float x, float z, float targetHeight) {
-        this(objPath, texPath, x, z, targetHeight, 0.15f, 1.5f, 0.80f);
+        this(objPath, texPath, x, z, targetHeight, 0.15f, 1.5f);
     }
 
     public RiggedModel(String objPath, String texPath, float x, float z, float targetHeight, float armCutFrac) {
-        this(objPath, texPath, x, z, targetHeight, armCutFrac, 1.5f, 0.80f);
+        this(objPath, texPath, x, z, targetHeight, armCutFrac, 1.5f);
     }
 
     public RiggedModel(String objPath, String texPath, float x, float z, float targetHeight, float armCutFrac, float armDropAngle) {
-        this(objPath, texPath, x, z, targetHeight, armCutFrac, armDropAngle, 0.80f);
-    }
-
-    public RiggedModel(String objPath, String texPath, float x, float z, float targetHeight, float armCutFrac, float armDropAngle, float shoulderFrac) {
         this.pos = new Vector3f(x, Ground.getHeightAt(x, z), z);
         this.rng = new Random();
         this.texture = texPath != null ? new Texture(texPath, false, false) : null;
         this.armCutFrac = armCutFrac;
         this.armDropAngle = armDropAngle;
-        this.shoulderFrac = shoulderFrac;
         
         float modelHeight = loadObj(objPath);
         
@@ -73,8 +73,7 @@ public final class RiggedModel {
         }
         
         System.out.println("[RIG] " + new java.io.File(objPath).getName()
-                + " h=" + modelHeight + " scale=" + scale
-                + " cut=" + armCutFrac + " drop=" + armDropAngle + " shldr=" + shoulderFrac);
+                + " h=" + modelHeight + " scale=" + scale + " cut=" + armCutFrac + " drop=" + armDropAngle);
         
         pickNewTarget();
     }
@@ -130,14 +129,14 @@ public final class RiggedModel {
         
         float worldNeckY     = minY + NECK_FRAC     * height;
         float worldHipY      = minY + HIP_FRAC      * height;
-        float worldShoulderY = minY + shoulderFrac  * height; // <-- используем параметр
+        float worldShoulderY = minY + SHOULDER_FRAC * height;
         
         float armCutX   = width * armCutFrac;
         float legPivotX = width * LEG_PIVOT_FRAC;
         
         float localNeckY     = NECK_FRAC     * height;
         float localHipY      = HIP_FRAC      * height;
-        float localShoulderY = shoulderFrac  * height; // <-- используем параметр
+        float localShoulderY = SHOULDER_FRAC * height;
 
         try (BufferedReader br = new BufferedReader(new FileReader(path))) {
             String line;

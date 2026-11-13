@@ -13,7 +13,7 @@ import java.util.Random;
 
 public final class Engine {
 
-    private static final String VERSION = "v41 (Lower Shoulders)";
+    private static final String VERSION = "v40.6 (Straight Arms)";
     private static final int TEEN_INDEX = 12;
 
     private static final String SPRITE_VERT = """
@@ -313,7 +313,7 @@ public final class Engine {
         String mrhTexPath = "mesh/MrH/texture_21.png";
         if (new File(mrhObjPath).exists()) {
             try {
-                riggedModels.add(new RiggedModel(mrhObjPath, mrhTexPath, 10f, 10f, 2.0f, 0.15f, 1.5f, 0.80f));
+                riggedModels.add(new RiggedModel(mrhObjPath, mrhTexPath, 10f, 10f, 2.0f, 0.15f, 1.5f));
                 System.out.println("  -> MrH loaded.");
             } catch (Exception e) {
                 System.err.println("  [ERROR] Failed to load MrH: " + e.getMessage());
@@ -751,7 +751,7 @@ public final class Engine {
                 if (new File(obj).exists()) {
                     try {
                         // Женщина: стандартные параметры
-                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 1.7f, 0.15f, 1.5f, 0.80f));
+                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 1.7f, 0.15f, 1.5f));
                     } catch (Exception e) {
                         System.err.println("[ERROR] Failed to load Female: " + e.getMessage());
                     }
@@ -762,8 +762,8 @@ public final class Engine {
                 String tex = "mesh/MrH/kk/texture_84.png";
                 if (new File(obj).exists()) {
                     try {
-                        // Качок: плечо опущено на 72% роста (было 80%)
-                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 2.0f, 0.20f, 1.5f, 0.72f));
+                        // Качок: 1.57f = ровно 90 градусов (строго вниз)
+                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 2.0f, 0.20f, 1.57f));
                     } catch (Exception e) {
                         System.err.println("[ERROR] Failed to load Kachok: " + e.getMessage());
                     }
@@ -774,8 +774,8 @@ public final class Engine {
                 String tex = "mesh/MrH/tt/texture_115.png";
                 if (new File(obj).exists()) {
                     try {
-                        // Толстяк: плечо опущено на 72% роста
-                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 1.9f, 0.24f, 1.5f, 0.72f));
+                        // Толстяк: 1.57f = ровно 90 градусов (строго вниз)
+                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 1.9f, 0.24f, 1.57f));
                     } catch (Exception e) {
                         System.err.println("[ERROR] Failed to load Tolstiy: " + e.getMessage());
                     }
