@@ -5,9 +5,11 @@ import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.stb.STBImage;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
 
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
+import java.util.Random;
 
 public final class Texture {
     private final int id;
@@ -84,6 +86,66 @@ public final class Texture {
 
             STBImage.stbi_image_free(image);
         }
+    }
+
+    /** Procedural pixel-art texture constructor. */
+    public Texture(int width, int height, int[] pixels, boolean pixelated) {
+        this.pixelWidth = width;
+        this.pixelHeight = height;
+        this.uMin = 0; this.vMin = 0; this.uMax = 1; this.vMax = 1;
+
+        id = GL11.glGenTextures();
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, id);
+
+        if (pixelated) {
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST);
+        } else {
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
+        }
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+        GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
+
+        ByteBuffer buffer = MemoryUtil.memAlloc(width * height * 4);
+        for (int y = height - 1; y >= 0; y--) { // flip Y for OpenGL
+            for (int x = 0; x < width; x++) {
+                int p = pixels[y * width + x];
+                buffer.put((byte)((p >> 16) & 0xFF)); // R
+                buffer.put((byte)((p >> 8) & 0xFF));  // G
+                buffer.put((byte)(p & 0xFF));         // B
+                buffer.put((byte)((p >> 24) & 0xFF)); // A
+            }
+        }
+        buffer.flip();
+
+        GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA, width, height, 0,
+                GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, buffer);
+        MemoryUtil.memFree(buffer);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+    }
+
+    /** Generates a Minecraft-style leaf texture with transparency holes. */
+    public static Texture generateLeaves() {
+        int w = 64, h = 64;
+        int[] px = new int[w * h];
+        Random rng = new Random();
+        int[] palette = {
+                0xFF2E5C31, // dark
+                0xFF3A7D44, // base
+                0xFF4E9F3D, // light
+                0xFF61C454, // highlight
+                0xFF1B3B1E  // very dark
+        };
+        for (int i = 0; i < px.length; i++) {
+            float r = rng.nextFloat();
+            if (r < 0.15f) {
+                px[i] = 0x00000000; // transparent hole
+            } else {
+                px[i] = palette[rng.nextInt(palette.length)];
+            }
+        }
+        return new Texture(w, h, px, true);
     }
 
     public int getId() { return id; }

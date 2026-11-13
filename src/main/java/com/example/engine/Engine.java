@@ -4,16 +4,16 @@ import org.joml.Vector3f;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.opengl.GL11;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
 public final class Engine {
 
-    private static final String VERSION = "v14 (Lifecycle + Sound)";
+    private static final String VERSION = "v20 (Fixed Tree Spawning)";
 
     private static final int TEEN_INDEX = 12;
-    private static final boolean SPAWN_HOUSES = false;
 
     private static final String SPRITE_VERT = """
             #version 330 core
@@ -67,7 +67,12 @@ public final class Engine {
             in vec2 vTexCoord;
             out vec4 FragColor;
             uniform sampler2D uTexture;
-            void main() { FragColor = texture(uTexture, vTexCoord); }
+            void main() {
+                vec4 c = texture(uTexture, vTexCoord);
+                if (c.a < 0.1) discard;
+                if (c.r > 0.92 && c.g > 0.92 && c.b > 0.92) discard;
+                FragColor = c;
+            }
             """;
 
     private static final String[] PEOPLE_IMAGES = {
@@ -93,6 +98,22 @@ public final class Engine {
             "Мальчик"
     };
 
+    private static ObjModel tryLoad(String folder, String base) {
+        String[] suffixes = {"", "1", "2"};
+        for (String s : suffixes) {
+            String obj = folder + "/" + base + s + ".obj";
+            String mtl = folder + "/" + base + s + ".mtl";
+            if (new File(obj).exists()) {
+                try {
+                    return new ObjModel(obj, mtl, null);
+                } catch (Exception e) {
+                    System.err.println("[ERROR] Failed to load " + obj + ": " + e.getMessage());
+                }
+            }
+        }
+        return null;
+    }
+
     public void run() {
         System.out.println("=== Engine " + VERSION + " ===");
 
@@ -100,8 +121,6 @@ public final class Engine {
         Renderer renderer = new Renderer();
         renderer.init();
         window.setCursorDisabled(true);
-
-        System.out.println("Window: " + window.width() + "x" + window.height() + " (fullscreen)");
 
         Camera camera = new Camera(window.aspectRatio());
         ShaderProgram spriteShader = new ShaderProgram(SPRITE_VERT, SPRITE_FRAG);
@@ -113,25 +132,18 @@ public final class Engine {
         GL11.glEnable(GL11.GL_BLEND);
         GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
 
-        System.out.println("Loading people from img/P/ ...");
         Texture[] peopleTex = new Texture[PEOPLE_IMAGES.length];
         for (int i = 0; i < PEOPLE_IMAGES.length; i++) {
             try {
                 peopleTex[i] = new Texture("img/P/" + PEOPLE_IMAGES[i]);
             } catch (Exception e) {
-                System.err.println("  [MISS] img/P/" + PEOPLE_IMAGES[i] + " -- " + e.getMessage());
                 peopleTex[i] = null;
             }
         }
 
         Texture[] typeTex = {
-                peopleTex[12],  // TEEN
-                peopleTex[10],  // FAT
-                peopleTex[3],   // FEMALE
-                peopleTex[11],  // PREGNANT
-                peopleTex[1],   // BABY
-                peopleTex[16],  // YOUNG_BOY
-                peopleTex[9],   // MUSCULAR
+                peopleTex[12], peopleTex[10], peopleTex[3], peopleTex[11],
+                peopleTex[1], peopleTex[16], peopleTex[9],
         };
         Eater.initTextures(typeTex);
 
@@ -151,53 +163,122 @@ public final class Engine {
 
         Encyclopedia encyclopedia = new Encyclopedia(peopleList);
 
-        // Houses (disabled for now)
-        List<House> houses = new ArrayList<>();
+        ObjModel treeModel = tryLoad("mesh/TreeRL", "Tree");
+        if (treeModel != null) treeModel.applyFallbackTexture(Texture.generateLeaves());
+
+        ObjModel vWalls = tryLoad("mesh/VillageHouse", "walls");
+        ObjModel vRoof  = tryLoad("mesh/VillageHouse", "roof");
+        ObjModel vDoor  = tryLoad("mesh/VillageHouse", "door");
+        ObjModel vWindows = tryLoad("mesh/VillageHouse", "windows");
+
+        ObjModel v2Walls = tryLoad("mesh/VillageHouse2Story", "walls");
+        ObjModel v2Roof  = tryLoad("mesh/VillageHouse2Story", "roof");
+        ObjModel v2Door  = tryLoad("mesh/VillageHouse2Story", "door");
+        ObjModel v2Windows = tryLoad("mesh/VillageHouse2Story", "windows");
+
+        ObjModel dWalls = tryLoad("mesh/DugoutHouse", "walls");
+        ObjModel dRoof  = tryLoad("mesh/DugoutHouse", "roof");
+        ObjModel dDoor  = tryLoad("mesh/DugoutHouse", "door");
+        ObjModel dWindows = tryLoad("mesh/DugoutHouse", "windows");
+
+        List<HouseInstance> houses = new ArrayList<>();
+        List<HouseInstance> trees = new ArrayList<>();
         List<Vector3f> houseCenters = new ArrayList<>();
-        Texture texWall = null, texFront = null, texRoof = null;
-        if (SPAWN_HOUSES) {
-            try {
-                texWall  = new Texture("img/H/Hos_L.png", true, false);
-                texFront = new Texture("img/H/Hos_V.png", false, false);
-                texRoof  = new Texture("img/H/Hos_K.png", true, false);
-            } catch (Exception e) { System.err.println("[ERROR] House textures: " + e.getMessage()); }
-            // ... (spawn logic omitted, disabled)
+        List<Vector3f> occupied = new ArrayList<>();
+        Random rng = new Random(42);
+
+        // --- Spawn VillageHouse ---
+        if (vWalls != null) {
+            float scale = 6.0f / Math.max(vWalls.getHeight(), vRoof != null ? vRoof.getHeight() : 1f);
+            int placed = 0, attempts = 0;
+            while (placed < 3 + rng.nextInt(3) && attempts++ < 500) {
+                float x = (rng.nextFloat() - 0.5f) * 150f, z = (rng.nextFloat() - 0.5f) * 150f;
+                if (Math.abs(x) < 20f && Math.abs(z) < 15f) continue;
+                boolean close = false;
+                for (Vector3f p : occupied) if (p.distanceSquared(x, 0, z) < 400f) { close = true; break; }
+                if (close) continue;
+                houseCenters.add(new Vector3f(x, 0, z));
+                occupied.add(new Vector3f(x, 0, z));
+                houses.add(new HouseInstance(vWalls, vRoof, vDoor, vWindows, x, 0, z, (float) Math.atan2(-x, -z), scale));
+                placed++;
+            }
         }
 
-        System.out.println("Scattering poop across the map...");
+        // --- Spawn VillageHouse2Story ---
+        if (v2Walls != null) {
+            float scale = 8.5f / Math.max(v2Walls.getHeight(), v2Roof != null ? v2Roof.getHeight() : 1f);
+            int placed = 0, attempts = 0;
+            while (placed < 3 + rng.nextInt(5) && attempts++ < 500) {
+                float x = (rng.nextFloat() - 0.5f) * 150f, z = (rng.nextFloat() - 0.5f) * 150f;
+                if (Math.abs(x) < 20f && Math.abs(z) < 15f) continue;
+                boolean close = false;
+                for (Vector3f p : occupied) if (p.distanceSquared(x, 0, z) < 400f) { close = true; break; }
+                if (close) continue;
+                houseCenters.add(new Vector3f(x, 0, z));
+                occupied.add(new Vector3f(x, 0, z));
+                houses.add(new HouseInstance(v2Walls, v2Roof, v2Door, v2Windows, x, 0, z, (float) Math.atan2(-x, -z), scale));
+                placed++;
+            }
+        }
+
+        // --- Spawn DugoutHouse ---
+        if (dWalls != null) {
+            float scale = 3.5f / Math.max(dWalls.getHeight(), dRoof != null ? dRoof.getHeight() : 1f);
+            int placed = 0, attempts = 0;
+            while (placed < 10 + rng.nextInt(6) && attempts++ < 1000) {
+                float x = (rng.nextFloat() - 0.5f) * 180f, z = (rng.nextFloat() - 0.5f) * 180f;
+                if (Math.abs(x) < 20f && Math.abs(z) < 15f) continue;
+                boolean close = false;
+                for (Vector3f p : occupied) if (p.distanceSquared(x, 0, z) < 150f) { close = true; break; }
+                if (close) continue;
+                houseCenters.add(new Vector3f(x, 0, z));
+                occupied.add(new Vector3f(x, 0, z));
+                houses.add(new HouseInstance(dWalls, dRoof, dDoor, dWindows, x, 0, z, (float) Math.atan2(-x, -z), scale));
+                placed++;
+            }
+        }
+
+        // --- Spawn Trees (placed much further away from houses) ---
+        if (treeModel != null) {
+            float scale = 6.5f / treeModel.getHeight();
+            int placed = 0, attempts = 0;
+            while (placed < 100 && attempts++ < 2000) {
+                float x = (rng.nextFloat() - 0.5f) * 220f, z = (rng.nextFloat() - 0.5f) * 220f;
+                if (Math.abs(x) < 15f && Math.abs(z) < 15f) continue;
+                boolean close = false;
+                // Very large exclusion radius (25m) from houses to prevent clipping
+                for (Vector3f hc : houseCenters) if (hc.distanceSquared(x, 0, z) < 625f) { close = true; break; }
+                // 10m exclusion from other trees
+                for (Vector3f p : occupied) if (p.distanceSquared(x, 0, z) < 100f) { close = true; break; }
+                if (close) continue;
+                occupied.add(new Vector3f(x, 0, z));
+                trees.add(new HouseInstance(treeModel, null, null, null, x, -0.6f, z, rng.nextFloat() * (float)Math.PI * 2f, scale));
+                placed++;
+            }
+            System.out.println("  -> " + placed + " Trees placed.");
+        }
+
         Poop.init();
         List<Poop> poops = new ArrayList<>();
         Random worldRng = new Random(2024);
-        int attempts = 0;
-        while (poops.size() < 90 && attempts < 1200) {
-            attempts++;
-            float x = (worldRng.nextFloat() - 0.5f) * 180f;
-            float z = (worldRng.nextFloat() - 0.5f) * 180f;
+        int poopAttempts = 0;
+        while (poops.size() < 90 && poopAttempts++ < 1200) {
+            float x = (worldRng.nextFloat() - 0.5f) * 180f, z = (worldRng.nextFloat() - 0.5f) * 180f;
             if (Math.abs(x) < 14f && Math.abs(z) < 8f) continue;
             boolean blocked = false;
-            for (Vector3f hc : houseCenters) if (hc.distanceSquared(x, 0f, z) < 36f) { blocked = true; break; }
-            if (blocked) continue;
-            poops.add(Poop.random(x, z, worldRng));
+            for (Vector3f hc : occupied) if (hc.distanceSquared(x, 0f, z) < 36f) { blocked = true; break; }
+            if (!blocked) poops.add(Poop.random(x, z, worldRng));
         }
-        int bigCount = 0;
-        for (Poop p : poops) if (p.big) bigCount++;
-        System.out.println("  -> " + poops.size() + " poops placed (" + bigCount + " big).");
 
-        System.out.println("Rendering poop preview icons...");
         UiTexture poopIcon = PoopPreview.render(256, false);
         GL11.glViewport(0, 0, window.width(), window.height());
         UiTexture brightPoopIcon = PoopPreview.render(256, true);
         GL11.glViewport(0, 0, window.width(), window.height());
 
-        // Initial NPC
         List<Eater> eaters = new ArrayList<>();
         Random npcRng = new Random(777);
         if (typeTex[Eater.Type.TEEN.ordinal()] != null) {
-            int row = TEEN_INDEX / 9, col = TEEN_INDEX % 9;
-            float x = startX + col * spacingX + (row == 1 ? spacingX * 0.5f : 0f);
-            float z = (row == 0) ? -2.0f : 0.0f;
-            eaters.add(new Eater(Eater.Type.TEEN, x, z, npcRng));
-            System.out.println("  -> 1 teenager awake at (" + x + ", " + z + ")");
+            eaters.add(new Eater(Eater.Type.TEEN, startX + 3 * spacingX + 0.6f, -2.0f, npcRng));
         }
 
         SpawnMenu spawnMenu = new SpawnMenu(typeTex, poopIcon, brightPoopIcon);
@@ -214,45 +295,35 @@ public final class Engine {
 
                 window.pollEvents();
 
-                boolean escPressed = window.isKeyPressed(GLFW.GLFW_KEY_ESCAPE);
-                if (escPressed && !escWasPressed) {
+                if (window.isKeyPressed(GLFW.GLFW_KEY_ESCAPE) && !escWasPressed) {
                     if (spawnMenu.isOpen()) {
-                        spawnMenu.close(); window.setCursorDisabled(true);
-                        camera.resetMouseLook(); leftWasPressed = true;
+                        spawnMenu.close(); window.setCursorDisabled(true); camera.resetMouseLook(); leftWasPressed = true;
                     } else if (encyclopedia.isOpen()) {
-                        encyclopedia.toggle(); window.setCursorDisabled(true);
-                        camera.resetMouseLook();
+                        encyclopedia.toggle(); window.setCursorDisabled(true); camera.resetMouseLook();
                     } else { return; }
                 }
-                escWasPressed = escPressed;
+                escWasPressed = window.isKeyPressed(GLFW.GLFW_KEY_ESCAPE);
 
-                boolean qPressed = window.isKeyPressed(GLFW.GLFW_KEY_Q);
-                if (qPressed && !qWasPressed) {
+                if (window.isKeyPressed(GLFW.GLFW_KEY_Q) && !qWasPressed) {
                     if (spawnMenu.isOpen()) {
-                        spawnMenu.close(); window.setCursorDisabled(true);
-                        camera.resetMouseLook();
+                        spawnMenu.close(); window.setCursorDisabled(true); camera.resetMouseLook();
                     } else {
                         if (encyclopedia.isOpen()) encyclopedia.toggle();
-                        spawnMenu.open(); window.setCursorDisabled(false);
-                        camera.resetMouseLook(); leftWasPressed = true;
+                        spawnMenu.open(); window.setCursorDisabled(false); camera.resetMouseLook(); leftWasPressed = true;
                     }
                 }
-                qWasPressed = qPressed;
+                qWasPressed = window.isKeyPressed(GLFW.GLFW_KEY_Q);
 
-                boolean tabPressed = window.isKeyPressed(GLFW.GLFW_KEY_TAB);
-                if (tabPressed && !tabWasPressed) {
+                if (window.isKeyPressed(GLFW.GLFW_KEY_TAB) && !tabWasPressed) {
                     if (spawnMenu.isOpen()) spawnMenu.close();
-                    encyclopedia.toggle();
-                    window.setCursorDisabled(!encyclopedia.isOpen());
-                    camera.resetMouseLook(); leftWasPressed = true;
+                    encyclopedia.toggle(); window.setCursorDisabled(!encyclopedia.isOpen()); camera.resetMouseLook(); leftWasPressed = true;
                 }
-                tabWasPressed = tabPressed;
+                tabWasPressed = window.isKeyPressed(GLFW.GLFW_KEY_TAB);
 
                 if (spawnMenu.isOpen()) {
                     double[] cp = window.cursorPos();
                     int idx = spawnMenu.hitTest(window.width(), window.height(), cp[0], cp[1]);
                     spawnMenu.setHovered(idx);
-
                     boolean left = window.isMouseButtonPressed(GLFW.GLFW_MOUSE_BUTTON_LEFT);
                     if (left && !leftWasPressed && idx >= 0) {
                         SpawnMenu.Action a = spawnMenu.actionAt(idx);
@@ -264,21 +335,17 @@ public final class Engine {
                 }
 
                 if (encyclopedia.isOpen()) {
-                    boolean upPressed = window.isKeyPressed(GLFW.GLFW_KEY_UP);
-                    if (upPressed && !upWasPressed) encyclopedia.prev();
-                    upWasPressed = upPressed;
-                    boolean downPressed = window.isKeyPressed(GLFW.GLFW_KEY_DOWN);
-                    if (downPressed && !downWasPressed) encyclopedia.next();
-                    downWasPressed = downPressed;
+                    if (window.isKeyPressed(GLFW.GLFW_KEY_UP) && !upWasPressed) encyclopedia.prev();
+                    upWasPressed = window.isKeyPressed(GLFW.GLFW_KEY_UP);
+                    if (window.isKeyPressed(GLFW.GLFW_KEY_DOWN) && !downWasPressed) encyclopedia.next();
+                    downWasPressed = window.isKeyPressed(GLFW.GLFW_KEY_DOWN);
                 } else { upWasPressed = false; downWasPressed = false; }
 
                 camera.setAspect(window.aspectRatio());
                 if (!spawnMenu.isOpen() && !encyclopedia.isOpen()) camera.update(window, dt);
 
                 List<Eater> newborns = new ArrayList<>();
-                for (Eater e : eaters) {
-                    e.update(dt, poops, eaters, newborns, camera.position());
-                }
+                for (Eater e : eaters) e.update(dt, poops, eaters, newborns, camera.position());
                 if (!newborns.isEmpty()) eaters.addAll(newborns);
                 poops.removeIf(p -> p.eaten);
 
@@ -286,23 +353,24 @@ public final class Engine {
                 sky.render();
                 ground.render(camera.view(), camera.projection());
 
-                if (!houses.isEmpty()) {
-                    houseShader.bind();
-                    for (House h : houses) h.render(houseShader, camera.view(), camera.projection());
-                    houseShader.unbind();
-                }
+                // --- 1. Opaque objects first (Houses) ---
+                houseShader.bind();
+                for (HouseInstance h : houses) h.render(houseShader, camera.view(), camera.projection());
+                
+                // --- 2. Transparent objects next (Trees) ---
+                // Disable depth writing so transparent leaves don't occlude other objects behind them
+                GL11.glDepthMask(false);
+                for (HouseInstance t : trees) t.render(houseShader, camera.view(), camera.projection());
+                GL11.glDepthMask(true);
+                houseShader.unbind();
 
                 Poop.begin(camera.view(), camera.projection());
                 for (Poop p : poops) p.render();
                 Poop.end();
 
                 spriteShader.bind();
-                for (Sprite s : sprites) {
-                    s.render(spriteShader, camera.view(), camera.projection(), camera.position(), now);
-                }
-                for (Eater e : eaters) {
-                    e.render(spriteShader, camera.view(), camera.projection(), camera.position(), now);
-                }
+                for (Sprite s : sprites) s.render(spriteShader, camera.view(), camera.projection(), camera.position(), now);
+                for (Eater e : eaters) e.render(spriteShader, camera.view(), camera.projection(), camera.position(), now);
                 spriteShader.unbind();
 
                 if (encyclopedia.isOpen() || spawnMenu.isOpen()) {
@@ -316,20 +384,13 @@ public final class Engine {
             }
         } finally {
             for (Texture t : peopleTex) if (t != null) t.destroy();
-            if (texWall  != null) texWall.destroy();
-            if (texFront != null) texFront.destroy();
-            if (texRoof  != null) texRoof.destroy();
-            encyclopedia.destroy();
-            spawnMenu.destroy();
-            if (poopIcon != null) poopIcon.destroy();
-            if (brightPoopIcon != null) brightPoopIcon.destroy();
-            Poop.destroyAll();
-            ui.destroy();
-            spriteShader.destroy();
-            houseShader.destroy();
-            sky.destroy();
-            ground.destroy();
-            window.destroy();
+            encyclopedia.destroy(); spawnMenu.destroy();
+            if (poopIcon != null) poopIcon.destroy(); if (brightPoopIcon != null) brightPoopIcon.destroy();
+            if (treeModel != null) treeModel.destroy();
+            if (vWalls != null) vWalls.destroy(); if (vRoof != null) vRoof.destroy(); if (vDoor != null) vDoor.destroy(); if (vWindows != null) vWindows.destroy();
+            if (v2Walls != null) v2Walls.destroy(); if (v2Roof != null) v2Roof.destroy(); if (v2Door != null) v2Door.destroy(); if (v2Windows != null) v2Windows.destroy();
+            if (dWalls != null) dWalls.destroy(); if (dRoof != null) dRoof.destroy(); if (dDoor != null) dDoor.destroy(); if (dWindows != null) dWindows.destroy();
+            Poop.destroyAll(); ui.destroy(); spriteShader.destroy(); houseShader.destroy(); sky.destroy(); ground.destroy(); window.destroy();
         }
     }
 
@@ -337,17 +398,12 @@ public final class Engine {
         Vector3f front = camera.frontVector();
         float yaw = (float) Math.atan2(front.z, front.x);
         Vector3f cam = camera.position();
-        return new float[]{
-                cam.x + (float) Math.cos(yaw) * 10f,
-                cam.z + (float) Math.sin(yaw) * 10f,
-        };
+        return new float[]{ cam.x + (float) Math.cos(yaw) * 10f, cam.z + (float) Math.sin(yaw) * 10f };
     }
 
-    private static void spawnFromMenu(SpawnMenu.Action action, Camera camera,
-                                      List<Poop> poops, List<Eater> eaters, Random rng) {
+    private static void spawnFromMenu(SpawnMenu.Action action, Camera camera, List<Poop> poops, List<Eater> eaters, Random rng) {
         float[] sp = spawnPoint(camera);
         float sx = sp[0], sz = sp[1];
-
         switch (action) {
             case SPAWN_TEEN        -> eaters.add(new Eater(Eater.Type.TEEN, sx, sz, rng));
             case SPAWN_FAT         -> eaters.add(new Eater(Eater.Type.FAT, sx, sz, rng));
@@ -362,8 +418,7 @@ public final class Engine {
                 for (int i = 0; i < 5; i++) {
                     float a = rng.nextFloat() * (float) (Math.PI * 2);
                     float r = 0.5f + rng.nextFloat() * 3f;
-                    poops.add(Poop.random(sx + (float) Math.cos(a) * r,
-                                          sz + (float) Math.sin(a) * r, rng));
+                    poops.add(Poop.random(sx + (float) Math.cos(a) * r, sz + (float) Math.sin(a) * r, rng));
                 }
             }
             case SPAWN_COMBO -> {
@@ -371,20 +426,16 @@ public final class Engine {
                 for (int i = 0; i < 5; i++) {
                     float a = rng.nextFloat() * (float) (Math.PI * 2);
                     float r = 1.5f + rng.nextFloat() * 5f;
-                    poops.add(Poop.random(sx + (float) Math.cos(a) * r,
-                                          sz + (float) Math.sin(a) * r, rng));
+                    poops.add(Poop.random(sx + (float) Math.cos(a) * r, sz + (float) Math.sin(a) * r, rng));
                 }
             }
             case SPAWN_TEEN_CROWD -> {
                 for (int i = 0; i < 5; i++) {
                     float a = rng.nextFloat() * (float) (Math.PI * 2);
                     float r = 0.5f + rng.nextFloat() * 3f;
-                    eaters.add(new Eater(Eater.Type.TEEN,
-                            sx + (float) Math.cos(a) * r,
-                            sz + (float) Math.sin(a) * r, rng));
+                    eaters.add(new Eater(Eater.Type.TEEN, sx + (float) Math.cos(a) * r, sz + (float) Math.sin(a) * r, rng));
                 }
             }
         }
-        System.out.println("[SPAWN] " + action + " @ (" + sx + ", " + sz + ")");
     }
 }
