@@ -1,6 +1,7 @@
 package com.example.engine;
 
 import org.joml.Matrix4f;
+import org.joml.Vector3f;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL14;
@@ -9,14 +10,8 @@ import org.lwjgl.opengl.GL30;
 import java.nio.ByteBuffer;
 import java.util.Random;
 
-/**
- * Renders one Poop instance into an offscreen texture at startup, so the
- * spawn menu can show a real 3D-looking icon of the poop.
- */
 public final class PoopPreview {
-
-    private PoopPreview() {
-    }
+    private PoopPreview() { }
 
     public static UiTexture render(int size, boolean bright) {
         int fbo = GL30.glGenFramebuffers();
@@ -42,8 +37,7 @@ public final class PoopPreview {
 
         int status = GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER);
         if (status != GL30.GL_FRAMEBUFFER_COMPLETE) {
-            System.err.println("[PoopPreview] framebuffer incomplete: 0x"
-                    + Integer.toHexString(status));
+            System.err.println("[PoopPreview] framebuffer incomplete: 0x" + Integer.toHexString(status));
             GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0);
             GL30.glBindRenderbuffer(GL30.GL_RENDERBUFFER, 0);
             GL30.glDeleteRenderbuffers(depthRbo);
@@ -57,17 +51,14 @@ public final class PoopPreview {
         GL11.glClearColor(0f, 0f, 0f, 0f);
         GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
 
-        Matrix4f view = new Matrix4f().lookAt(
-                0.0f, 1.3f, 1.6f,
-                0.0f, 0.45f, 0.0f,
-                0.0f, 1.0f, 0.0f);
-        Matrix4f proj = new Matrix4f().perspective(
-                (float) Math.toRadians(45f), 1f, 0.1f, 20f);
+        Matrix4f view = new Matrix4f().lookAt(0.0f, 1.3f, 1.6f, 0.0f, 0.45f, 0.0f, 0.0f, 1.0f, 0.0f);
+        Matrix4f proj = new Matrix4f().perspective((float) Math.toRadians(45f), 1f, 0.1f, 20f);
 
-        Poop.begin(view, proj);
+        // Fix: begin() now requires camPos, fogColor, fogDensity
+        Poop.begin(view, proj, new Vector3f(0.0f, 1.3f, 1.6f), new Vector3f(0, 0, 0), 0.0f);
         Poop preview = bright
-                ? Poop.bright(0f, 0f, new Random(42))
-                : Poop.normal(0f, 0f, new Random(42));
+                ? Poop.brightAt(0f, 0f, 0f, new Random(42))
+                : Poop.normalAt(0f, 0f, 0f, new Random(42));
         preview.render();
         Poop.end();
 
@@ -75,7 +66,6 @@ public final class PoopPreview {
         GL30.glBindRenderbuffer(GL30.GL_RENDERBUFFER, 0);
         GL30.glDeleteRenderbuffers(depthRbo);
         GL30.glDeleteFramebuffers(fbo);
-
         return new UiTexture(tex, size, size);
     }
 }

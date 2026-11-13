@@ -11,8 +11,8 @@ import org.lwjgl.system.MemoryUtil;
 import java.nio.FloatBuffer;
 
 /**
- * Hyper-realistic water plane with Fresnel reflection, specular sun highlights,
- * and procedural waves.
+ * Hyper-realistic water — clips to the circular lake, never writes to
+ * the depth buffer, and accepts the weather-modified sun colour.
  */
 public final class Water {
     private final int vao;
@@ -43,14 +43,16 @@ public final class Water {
             uniform float uTime;
             uniform vec3 uFogColor;
             uniform float uFogDensity;
+            uniform vec2 uLakeCenter;
+            uniform float uLakeRadius;
 
-            // Simple 2D noise for waves
             float wave(vec2 p) {
                 return sin(p.x * 0.5 + uTime) * cos(p.y * 0.4 + uTime * 0.8) * 0.2;
             }
 
             void main() {
-                // Normal perturbation via derivatives of waves
+                if (distance(vWorld.xz, uLakeCenter) > uLakeRadius) discard;
+
                 float eps = 0.1;
                 float h = wave(vWorld.xz);
                 float hx = wave(vWorld.xz + vec2(eps, 0.0));
@@ -58,25 +60,15 @@ public final class Water {
                 vec3 n = normalize(vec3(h - hx, 1.0, h - hz));
 
                 vec3 viewDir = normalize(uCamPos - vWorld);
-                
-                // Fresnel effect (water is more reflective at shallow angles)
                 float fresnel = pow(1.0 - max(dot(n, viewDir), 0.0), 3.0);
-                
-                // Sky reflection
                 vec3 skyColor = mix(uSkyBottom, uSkyTop, max(0.0, viewDir.y));
-                
-                // Sun specular highlight
                 vec3 halfVec = normalize(uSunDir + viewDir);
                 float spec = pow(max(dot(n, halfVec), 0.0), 256.0);
-                
-                // Deep water color
                 vec3 deepColor = vec3(0.05, 0.15, 0.25);
-                
-                // Combine
-                vec3 col = mix(deepColor, skyColor, fresnel);
-                col += uSunColor * spec * 2.0; // bright sun reflection
 
-                // Fog
+                vec3 col = mix(deepColor, skyColor, fresnel);
+                col += uSunColor * spec * 2.0;
+
                 float dist = length(vWorld - uCamPos);
                 float fog = 1.0 - exp(-pow(dist * uFogDensity, 2.0));
                 col = mix(col, uFogColor, fog);
@@ -88,10 +80,8 @@ public final class Water {
     public Water() {
         shader = new ShaderProgram(VERT, FRAG);
 
-        float size = Ground.LAKE_RADIUS * 2.2f; // slightly bigger than the lake basin
-        float cx = Ground.LAKE_X;
-        float cz = Ground.LAKE_Z;
-        float y = Ground.WATER_LEVEL;
+        float size = Ground.LAKE_RADIUS * 2.2f;
+        float cx = Ground.LAKE_X, cz = Ground.LAKE_Z, y = Ground.WATER_LEVEL;
 
         float[] verts = {
                 cx - size, y, cz - size,
@@ -117,17 +107,17 @@ public final class Water {
     }
 
     public void render(Matrix4f view, Matrix4f projection,
-                       DayNight dayNight, Vector3f camPos, float time,
+                       DayNight dayNight, Vector3f sunColor,
+                       Vector3f camPos, float time,
                        Vector3f fogColor, float fogDensity) {
         shader.bind();
         shader.setUniform("uView", view);
         shader.setUniform("uProjection", projection);
-        
+
         Vector3f sunDir = dayNight.sunDir();
-        Vector3f sunColor = dayNight.sunColor();
         Vector3f skyTop = dayNight.skyTop();
         Vector3f skyBottom = dayNight.skyBottom();
-        
+
         shader.setUniform3f("uSunDir", sunDir.x, sunDir.y, sunDir.z);
         shader.setUniform3f("uSunColor", sunColor.x, sunColor.y, sunColor.z);
         shader.setUniform3f("uCamPos", camPos.x, camPos.y, camPos.z);
@@ -136,14 +126,18 @@ public final class Water {
         shader.setUniform1f("uTime", time);
         shader.setUniform3f("uFogColor", fogColor.x, fogColor.y, fogColor.z);
         shader.setUniform1f("uFogDensity", fogDensity);
+        shader.setUniform2f("uLakeCenter", Ground.LAKE_X, Ground.LAKE_Z);
+        shader.setUniform1f("uLakeRadius", Ground.LAKE_RADIUS);
 
         GL11.glEnable(GL11.GL_BLEND);
         GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
-        
+        GL11.glDepthMask(false);
+
         GL30.glBindVertexArray(vao);
         GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 6);
         GL30.glBindVertexArray(0);
-        
+
+        GL11.glDepthMask(true);
         GL11.glDisable(GL11.GL_BLEND);
         shader.unbind();
     }

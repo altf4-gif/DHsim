@@ -1,6 +1,7 @@
 package com.example.engine;
 
 import org.joml.Matrix4f;
+import org.joml.Vector3f;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
@@ -13,7 +14,7 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * Procedural 3D poop. Now correctly places itself on terrain height.
+ * Procedural poop. Now supports fog (distance blending) and global tint.
  */
 public final class Poop {
 
@@ -25,22 +26,36 @@ public final class Poop {
             uniform mat4 uView;
             uniform mat4 uProjection;
             out vec3 vColor;
+            out vec3 vWorld;
             void main() {
                 vColor = aColor;
-                gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
+                vec4 world = uModel * vec4(aPos, 1.0);
+                vWorld = world.xyz;
+                gl_Position = uProjection * uView * world;
             }
             """;
 
     private static final String FRAG = """
             #version 330 core
             in vec3 vColor;
+            in vec3 vWorld;
             out vec4 FragColor;
+
             uniform float uGold;
             uniform vec3 uLightTint;
+            uniform vec3 uCamPos;
+            uniform vec3 uFogColor;
+            uniform float uFogDensity;
+
             void main() {
                 vec3 gold = vec3(1.0, 0.85, 0.15);
-                vec3 col = mix(vColor, gold, uGold);
-                FragColor = vec4(col * uLightTint, 1.0);
+                vec3 col = mix(vColor, gold, uGold) * uLightTint;
+                
+                float dist = length(vWorld - uCamPos);
+                float fog = 1.0 - exp(-pow(dist * uFogDensity, 2.0));
+                col = mix(col, uFogColor, fog);
+                
+                FragColor = vec4(col, 1.0);
             }
             """;
 
@@ -50,26 +65,29 @@ public final class Poop {
 
     private static ShaderProgram shader;
     private static Variant[] variants;
+    private static Vector3f sCamPos = new Vector3f();
+    private static Vector3f sFogColor = new Vector3f();
+    private static float sFogDensity = 0f;
 
     public final float x;
-    public final float y;
+    public float y;
     public final float z;
     public final boolean bright;
     public final boolean big;
     public boolean eaten;
 
     private final Variant variant;
-    private final Matrix4f model;
+    private final Matrix4f model = new Matrix4f();
+    private final float yaw;
+    private final float scale;
 
-    private Poop(Variant variant, Matrix4f model, float x, float y, float z,
+    private Poop(Variant variant, float x, float y, float z, float yaw, float scale,
                  boolean bright, boolean big) {
         this.variant = variant;
-        this.model = model;
-        this.x = x;
-        this.y = y;
-        this.z = z;
-        this.bright = bright;
-        this.big = big;
+        this.x = x; this.y = y; this.z = z;
+        this.yaw = yaw; this.scale = scale;
+        this.bright = bright; this.big = big;
+        model.translate(x, y, z).rotateY(yaw).scale(scale);
     }
 
     public static void init() {
@@ -82,31 +100,52 @@ public final class Poop {
     }
 
     public static Poop random(float x, float z, Random rng) {
-        return make(x, z, rng, rng.nextFloat() < BRIGHT_CHANCE);
-    }
-    public static Poop bright(float x, float z, Random rng) {
-        return make(x, z, rng, true);
-    }
-    public static Poop normal(float x, float z, Random rng) {
-        return make(x, z, rng, false);
+        return make(x, z, Ground.getHeightAt(x, z), rng, rng.nextFloat() < BRIGHT_CHANCE);
     }
 
-    private static Poop make(float x, float z, Random rng, boolean bright) {
+    public static Poop bright(float x, float z, Random rng) {
+        return make(x, z, Ground.getHeightAt(x, z), rng, true);
+    }
+
+    public static Poop normal(float x, float z, Random rng) {
+        return make(x, z, Ground.getHeightAt(x, z), rng, false);
+    }
+
+    public static Poop brightAt(float x, float y, float z, Random rng) {
+        return make(x, z, y, rng, true);
+    }
+
+    public static Poop normalAt(float x, float y, float z, Random rng) {
+        return make(x, z, y, rng, false);
+    }
+
+    private static Poop make(float x, float z, float y, Random rng, boolean bright) {
         Variant v = variants[rng.nextInt(NUM_VARIANTS)];
         float yaw = rng.nextFloat() * (float) (Math.PI * 2);
         float scale = 0.6f + rng.nextFloat() * 0.7f;
         if (rng.nextFloat() < 0.08f) scale *= 2.1f;
         boolean big = scale >= BIG_THRESHOLD;
-        
-        float y = Ground.getHeightAt(x, z);
-        Matrix4f m = new Matrix4f().translate(x, y, z).rotateY(yaw).scale(scale);
-        return new Poop(v, m, x, y, z, bright, big);
+        return new Poop(v, x, y, z, yaw, scale, bright, big);
     }
 
-    public static void begin(Matrix4f view, Matrix4f projection) {
+    public void repositionY() {
+        this.y = Ground.getHeightAt(x, z);
+        model.identity().translate(x, y, z).rotateY(yaw).scale(scale);
+    }
+
+    public static void begin(Matrix4f view, Matrix4f projection,
+                             Vector3f camPos, Vector3f fogColor, float fogDensity) {
         shader.bind();
         shader.setUniform("uView", view);
         shader.setUniform("uProjection", projection);
+        
+        sCamPos.set(camPos);
+        sFogColor.set(fogColor);
+        sFogDensity = fogDensity;
+        
+        shader.setUniform3f("uCamPos", sCamPos.x, sCamPos.y, sCamPos.z);
+        shader.setUniform3f("uFogColor", sFogColor.x, sFogColor.y, sFogColor.z);
+        shader.setUniform1f("uFogDensity", sFogDensity);
     }
 
     public static void setLightTint(float r, float g, float b) {
@@ -142,19 +181,16 @@ public final class Poop {
         }
 
         static Variant build(Random rng) {
-            final int RINGS = 28;
-            final int SIDES = 32;
-
-            float height     = 1.0f;
+            final int RINGS = 28, SIDES = 32;
+            float height = 1.0f;
             float baseRadius = 0.42f + rng.nextFloat() * 0.08f;
-            float lean       = 0.06f + rng.nextFloat() * 0.07f;
-            float leanAngle  = rng.nextFloat() * (float) (Math.PI * 2);
-            float twist      = (float) (Math.PI * (1.0f + rng.nextFloat() * 0.7f));
-            float ridgeAmp   = 0.10f + rng.nextFloat() * 0.07f;
-            int   ridgeCount = 5 + rng.nextInt(3);
-            float phase      = rng.nextFloat() * (float) (Math.PI * 2);
-            float tipPinch   = 0.55f + rng.nextFloat() * 0.20f;
-
+            float lean = 0.06f + rng.nextFloat() * 0.07f;
+            float leanAngle = rng.nextFloat() * (float) (Math.PI * 2);
+            float twist = (float) (Math.PI * (1.0f + rng.nextFloat() * 0.7f));
+            float ridgeAmp = 0.10f + rng.nextFloat() * 0.07f;
+            int ridgeCount = 5 + rng.nextInt(3);
+            float phase = rng.nextFloat() * (float) (Math.PI * 2);
+            float tipPinch = 0.55f + rng.nextFloat() * 0.20f;
             float cr = 0.32f + rng.nextFloat() * 0.06f;
             float cg = 0.20f + rng.nextFloat() * 0.05f;
             float cb = 0.10f + rng.nextFloat() * 0.03f;
@@ -169,9 +205,9 @@ public final class Poop {
                 rBase *= (1.0f - t * tipPinch);
                 float ox = (float) Math.cos(leanAngle) * lean * t * t;
                 float oz = (float) Math.sin(leanAngle) * lean * t * t;
-                float y  = t * height;
+                float y = t * height;
                 for (int j = 0; j < SIDES; j++) {
-                    float angle  = (float) (2.0 * Math.PI * j / SIDES);
+                    float angle = (float) (2.0 * Math.PI * j / SIDES);
                     float spiral = angle * ridgeCount + twist * t + phase;
                     float r = rBase * (1.0f + ridgeAmp * (float) Math.sin(spiral));
                     px[i][j] = ox + r * (float) Math.cos(angle);
@@ -183,13 +219,10 @@ public final class Poop {
             float[][] vnx = new float[RINGS + 1][SIDES];
             float[][] vny = new float[RINGS + 1][SIDES];
             float[][] vnz = new float[RINGS + 1][SIDES];
-
             for (int i = 0; i <= RINGS; i++) {
-                int im = Math.max(i - 1, 0);
-                int ip = Math.min(i + 1, RINGS);
+                int im = Math.max(i - 1, 0), ip = Math.min(i + 1, RINGS);
                 for (int j = 0; j < SIDES; j++) {
-                    int jm = (j - 1 + SIDES) % SIDES;
-                    int jp = (j + 1) % SIDES;
+                    int jm = (j - 1 + SIDES) % SIDES, jp = (j + 1) % SIDES;
                     float ttx = px[ip][j] - px[im][j];
                     float tty = py[ip][j] - py[im][j];
                     float ttz = pz[ip][j] - pz[im][j];
@@ -214,7 +247,7 @@ public final class Poop {
             for (int i = 0; i < RINGS; i++) {
                 for (int j = 0; j < SIDES; j++) {
                     int j2 = (j + 1) % SIDES;
-                    addShaded(out, i, j,  px, py, pz, vnx, vny, vnz, cr, cg, cb, lx, ly, lz);
+                    addShaded(out, i, j, px, py, pz, vnx, vny, vnz, cr, cg, cb, lx, ly, lz);
                     addShaded(out, i, j2, px, py, pz, vnx, vny, vnz, cr, cg, cb, lx, ly, lz);
                     addShaded(out, i + 1, j, px, py, pz, vnx, vny, vnz, cr, cg, cb, lx, ly, lz);
                     addShaded(out, i, j2, px, py, pz, vnx, vny, vnz, cr, cg, cb, lx, ly, lz);
@@ -227,7 +260,7 @@ public final class Poop {
                 int j2 = (j + 1) % SIDES;
                 addFlat(out, 0f, 0f, 0f, cr * capShade, cg * capShade, cb * capShade);
                 addFlat(out, px[0][j2], py[0][j2], pz[0][j2], cr * capShade, cg * capShade, cb * capShade);
-                addFlat(out, px[0][j],  py[0][j],  pz[0][j],  cr * capShade, cg * capShade, cb * capShade);
+                addFlat(out, px[0][j], py[0][j], pz[0][j], cr * capShade, cg * capShade, cb * capShade);
             }
 
             float[] data = new float[out.size()];
@@ -260,7 +293,7 @@ public final class Poop {
             float nx = vnx[i][j], ny = vny[i][j], nz = vnz[i][j];
             float lambert = Math.max(0f, nx * lx + ny * ly + nz * lz);
             float shade = 0.40f + 0.75f * lambert;
-            float tint  = 1.0f + 0.25f * y;
+            float tint = 1.0f + 0.25f * y;
             out.add(x); out.add(y); out.add(z);
             out.add(clamp(cr * shade * tint));
             out.add(clamp(cg * shade * tint));

@@ -4,9 +4,11 @@ import org.joml.Matrix4f;
 
 /**
  * An instance of a composed model (walls + roof + door + windows).
- * Transform is mutable so the tree chopping animation can shrink trees.
+ * Exposes x/y/z so spatial queries (overlap checks) can be done without
+ * reaching into the matrix.
  */
 public final class HouseInstance {
+    public final float x, y, z;
     private final ObjModel walls, roof, door, windows;
     private final Matrix4f model = new Matrix4f();
 
@@ -16,6 +18,7 @@ public final class HouseInstance {
         this.roof = roof;
         this.door = door;
         this.windows = windows;
+        this.x = x; this.y = y; this.z = z;
         setTransform(x, y, z, yaw, scale);
     }
 

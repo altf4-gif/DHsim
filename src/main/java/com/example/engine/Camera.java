@@ -8,11 +8,10 @@ import org.lwjgl.system.MemoryStack;
 import java.nio.DoubleBuffer;
 
 /**
- * Free-fly camera. WASD moves, mouse looks around.
- * Space / LeftShift = up / down. Esc closes the app (handled in Engine).
+ * Free-fly camera. Now starts above ground (Ground.getHeightAt + eye height).
  */
 public final class Camera {
-    private final Vector3f position = new Vector3f(0.7f, 0.5f, 6.5f);
+    private final Vector3f position = new Vector3f(0.7f, 3.2f, 6.5f);
     private float yaw = -90f;
     private float pitch = 0f;
 
@@ -23,13 +22,21 @@ public final class Camera {
     private final float moveSpeed = 4.0f;
     private final float mouseSensitivity = 0.12f;
     private final float fov = 60f;
+    private final float eyeHeight = 1.7f;
 
     private float lastX;
     private float lastY;
     private boolean firstMouse = true;
 
     public Camera(float aspectRatio) {
+        snapToGround();
         setAspect(aspectRatio);
+        updateView();
+    }
+
+    /** Snaps camera to `Ground.getHeightAt + eyeHeight`. Call after terrain pads are created. */
+    public void snapToGround() {
+        position.y = Ground.getHeightAt(position.x, position.z) + eyeHeight;
         updateView();
     }
 
@@ -73,8 +80,7 @@ public final class Camera {
             float y = (float) yBuf.get(0);
 
             if (firstMouse) {
-                lastX = x;
-                lastY = y;
+                lastX = x; lastY = y;
                 firstMouse = false;
                 return;
             }

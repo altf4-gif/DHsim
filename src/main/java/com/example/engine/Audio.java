@@ -9,27 +9,32 @@ import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Tiny MP3 playback helper with per-sound volume.
- *
- * JLayer is loaded through reflection, so the project still compiles and
- * runs without lib\jlayer-*.jar (just silent). Volume is applied by wrapping
- * JLayer's AudioDevice in a Java dynamic proxy that scales every PCM frame
- * before it goes to the sound card.
+ * MP3 playback with a voice pool, master mute toggle, and per-sound volume
+ * via a JLayer audio-device proxy.
  */
 public final class Audio {
 
     private static final String JLAYER_URL =
             "https://repo1.maven.org/maven2/com/googlecode/soundlibs/jlayer/1.0.1.4/jlayer-1.0.1.4.jar";
 
+    private static final int MAX_VOICES = 24;
+    private static final int MAX_LOOP_VOICES = 8;
+    private static final AtomicInteger activeVoices = new AtomicInteger(0);
+    private static final List<Handle> activeHandles = new ArrayList<>();
+
+    private static volatile boolean muted = false;
+
     private static final Set<String> warnedPaths = new HashSet<>();
 
     private static boolean initDone;
     private static boolean jlayerAvailable;
-
     private static Class<?> audioDeviceItf;
     private static Constructor<?> playerCtorWithStream;
     private static Constructor<?> playerCtorWithDevice;
@@ -37,7 +42,19 @@ public final class Audio {
     private static Method playMethod;
     private static Method closeMethod;
 
-    private Audio() {
+    private Audio() {}
+
+    public static void toggleMuted() { setMuted(!muted); }
+    public static void setMuted(boolean m) {
+        muted = m;
+        if (m) stopAll();
+    }
+    public static boolean isMuted() { return muted; }
+
+    public static void stopAll() {
+        List<Handle> copy;
+        synchronized (activeHandles) { copy = new ArrayList<>(activeHandles); }
+        for (Handle h : copy) h.stop();
     }
 
     private static synchronized boolean jlayer() {
@@ -45,25 +62,18 @@ public final class Audio {
         initDone = true;
         try {
             Class<?> playerCls = Class.forName("javazoom.jl.player.Player");
-            audioDeviceItf     = Class.forName("javazoom.jl.player.AudioDevice");
-            Class<?> jsDevCls  = Class.forName("javazoom.jl.player.JavaSoundAudioDevice");
-
+            audioDeviceItf = Class.forName("javazoom.jl.player.AudioDevice");
+            Class<?> jsDevCls = Class.forName("javazoom.jl.player.JavaSoundAudioDevice");
             playerCtorWithStream = playerCls.getConstructor(InputStream.class);
             playerCtorWithDevice = playerCls.getConstructor(InputStream.class, audioDeviceItf);
-            jsAudioDeviceCtor    = jsDevCls.getDeclaredConstructor();
-
-            playMethod  = playerCls.getMethod("play");
+            jsAudioDeviceCtor = jsDevCls.getDeclaredConstructor();
+            playMethod = playerCls.getMethod("play");
             closeMethod = playerCls.getMethod("close");
-
             jlayerAvailable = true;
             System.out.println("[AUDIO] JLayer found - mp3 playback enabled.");
         } catch (Throwable t) {
             jlayerAvailable = false;
-            System.err.println("[AUDIO] ================================================");
-            System.err.println("[AUDIO] JLayer not found - the game runs WITHOUT sound.");
-            System.err.println("[AUDIO] Put this jar into lib\\ and rebuild:");
-            System.err.println("[AUDIO]   " + JLAYER_URL);
-            System.err.println("[AUDIO] ================================================");
+            System.err.println("[AUDIO] JLayer not found - running silently.");
         }
         return jlayerAvailable;
     }
@@ -91,35 +101,29 @@ public final class Audio {
         return false;
     }
 
-    /** Builds an AudioDevice proxy that scales every PCM frame by {@code volume}. */
     private static Object makeVolumeDevice(float volume) throws Exception {
         final Object real = jsAudioDeviceCtor.newInstance();
         final float v = Math.max(0f, Math.min(1f, volume));
-
         InvocationHandler h = (proxy, method, args) -> {
             if ("write".equals(method.getName()) && args != null && args.length == 3) {
                 short[] samples = (short[]) args[0];
                 int offs = (Integer) args[1];
-                int len  = (Integer) args[2];
+                int len = (Integer) args[2];
                 short[] scaled = samples.clone();
                 for (int i = offs; i < offs + len; i++) {
                     int s = (int) (scaled[i] * v);
-                    if (s > 32767)  s = 32767;
+                    if (s > 32767) s = 32767;
                     if (s < -32768) s = -32768;
                     scaled[i] = (short) s;
                 }
                 args[0] = scaled;
             }
-            try {
-                return method.invoke(real, args);
-            } catch (InvocationTargetException e) {
-                throw e.getCause();
-            }
+            try { return method.invoke(real, args); }
+            catch (InvocationTargetException e) { throw e.getCause(); }
         };
         return Proxy.newProxyInstance(
                 audioDeviceItf.getClassLoader(),
-                new Class<?>[]{ audioDeviceItf },
-                h);
+                new Class<?>[]{ audioDeviceItf }, h);
     }
 
     public static final class Handle {
@@ -139,8 +143,16 @@ public final class Audio {
 
         private void start() {
             if (volume <= 0.01f) { stopped = true; return; }
+            if (muted)          { stopped = true; return; }
             if (!jlayer())      { stopped = true; return; }
             if (!fileOk(path))  { stopped = true; return; }
+
+            int current = activeVoices.get();
+            if (!loop && current >= MAX_VOICES) { stopped = true; return; }
+            if (loop && current >= MAX_VOICES + MAX_LOOP_VOICES) { stopped = true; return; }
+
+            activeVoices.incrementAndGet();
+            synchronized (activeHandles) { activeHandles.add(this); }
 
             Thread t = new Thread(this::run, "audio:" + path);
             t.setDaemon(true);
@@ -151,7 +163,6 @@ public final class Audio {
             long deadline = (loop && duration > 0f)
                     ? System.nanoTime() + (long) (duration * 1_000_000_000L)
                     : Long.MAX_VALUE;
-
             try {
                 do {
                     if (stopped) break;
@@ -169,13 +180,14 @@ public final class Audio {
                         player = null;
                         closeMethod.invoke(p);
                     } finally {
-                        try { in.close(); } catch (Exception ignored) { }
+                        try { in.close(); } catch (Exception ignored) {}
                     }
                 } while (loop && !stopped && System.nanoTime() < deadline);
             } catch (Throwable t) {
-                if (!stopped) {
-                    System.err.println("[AUDIO] " + path + " -> " + t);
-                }
+                if (!stopped) System.err.println("[AUDIO] " + path + " -> " + t);
+            } finally {
+                activeVoices.decrementAndGet();
+                synchronized (activeHandles) { activeHandles.remove(this); }
             }
         }
 
@@ -183,7 +195,7 @@ public final class Audio {
             stopped = true;
             Object p = player;
             if (p != null) {
-                try { closeMethod.invoke(p); } catch (Throwable ignored) { }
+                try { closeMethod.invoke(p); } catch (Throwable ignored) {}
             }
         }
     }

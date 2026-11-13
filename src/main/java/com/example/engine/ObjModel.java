@@ -16,11 +16,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * A robust Wavefront .obj loader that supports multiple materials.
- * It reads the associated .mtl file to apply different textures to
- * different parts of the same model (e.g. brown trunk vs green leaves).
- */
 public final class ObjModel {
 
     private final List<Part> parts = new ArrayList<>();
@@ -42,10 +37,14 @@ public final class ObjModel {
         parseObj(objPath, mtlPath, defaultTexPath, mtlMap);
     }
 
-    /** Applies a texture to any parts that failed to load their texture. */
     public void applyFallbackTexture(Texture tex) {
+        for (Part p : parts) if (p.texture == null) p.texture = tex;
+    }
+
+    public void setTexture(Texture tex) {
         for (Part p : parts) {
-            if (p.texture == null) p.texture = tex;
+            if (p.texture != null) p.texture.destroy();
+            p.texture = tex;
         }
     }
 
@@ -65,9 +64,7 @@ public final class ObjModel {
                     map.put(currentMtl, path);
                 }
             }
-        } catch (Exception e) {
-            // Ignore mtl errors, default to fallback
-        }
+        } catch (Exception e) { }
     }
 
     private static int parseIndex(String s, int total) {
@@ -112,19 +109,16 @@ public final class ObjModel {
                             String[] sub = parts[i].split("/");
                             faceV.add(parseIndex(sub[0], verts.size() / 3));
                             faceUV.add(sub.length > 1 && !sub[1].isEmpty()
-                                    ? parseIndex(sub[1], uvs.size() / 2) : 0);
+                                    ? parseIndex(sub[1], uvs.size() / 2) : -1);
                         }
                         vIdxMap.putIfAbsent(currentMat, new ArrayList<>());
                         uvIdxMap.putIfAbsent(currentMat, new ArrayList<>());
                         List<Integer> vList = vIdxMap.get(currentMat);
                         List<Integer> uvList = uvIdxMap.get(currentMat);
                         for (int i = 1; i < faceV.size() - 1; i++) {
-                            vList.add(faceV.get(0));
-                            uvList.add(faceUV.get(0));
-                            vList.add(faceV.get(i));
-                            uvList.add(faceUV.get(i));
-                            vList.add(faceV.get(i + 1));
-                            uvList.add(faceUV.get(i + 1));
+                            vList.add(faceV.get(0)); uvList.add(faceUV.get(0));
+                            vList.add(faceV.get(i)); uvList.add(faceUV.get(i));
+                            vList.add(faceV.get(i + 1)); uvList.add(faceUV.get(i + 1));
                         }
                     }
                 }
@@ -142,15 +136,15 @@ public final class ObjModel {
             float[] data = new float[vertexCount * 5];
             for (int i = 0; i < vertexCount; i++) {
                 int vIdx = vIndices.get(i) * 3;
-                int uvIdx = uvIndices.get(i) * 2;
+                int uvRaw = uvIndices.get(i);
+                int uvIdx = uvRaw * 2;
                 int offset = i * 5;
                 data[offset]     = verts.get(vIdx);
                 data[offset + 1] = verts.get(vIdx + 1);
                 data[offset + 2] = verts.get(vIdx + 2);
                 float u = 0, v = 0;
-                if (uvIdx + 1 < uvs.size()) {
-                    u = uvs.get(uvIdx);
-                    v = uvs.get(uvIdx + 1);
+                if (uvRaw >= 0 && uvIdx + 1 < uvs.size()) {
+                    u = uvs.get(uvIdx); v = uvs.get(uvIdx + 1);
                 }
                 data[offset + 3] = u;
                 data[offset + 4] = v;
@@ -161,26 +155,21 @@ public final class ObjModel {
             int vbo = GL15.glGenBuffers();
             GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, vbo);
             FloatBuffer buf = MemoryUtil.memAllocFloat(data.length);
-            try {
-                buf.put(data).flip();
-                GL15.glBufferData(GL15.GL_ARRAY_BUFFER, buf, GL15.GL_STATIC_DRAW);
-            } finally {
-                MemoryUtil.memFree(buf);
-            }
+            try { buf.put(data).flip(); GL15.glBufferData(GL15.GL_ARRAY_BUFFER, buf, GL15.GL_STATIC_DRAW); }
+            finally { MemoryUtil.memFree(buf); }
 
             int stride = 5 * Float.BYTES;
             GL20.glVertexAttribPointer(0, 3, GL11.GL_FLOAT, false, stride, 0L);
             GL20.glEnableVertexAttribArray(0);
             GL20.glVertexAttribPointer(1, 2, GL11.GL_FLOAT, false, stride, 3L * Float.BYTES);
             GL20.glEnableVertexAttribArray(1);
-
             GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
             GL30.glBindVertexArray(0);
 
             String texPath = mtlMap.getOrDefault(mat, defaultTexPath);
             Texture tex = null;
             if (texPath != null) {
-                try { tex = new Texture(texPath, true, false); } catch (Exception e) {}
+                try { tex = new Texture(texPath, true, false); } catch (Exception e) { }
             }
             this.parts.add(new Part(vao, vbo, vertexCount, tex));
         }

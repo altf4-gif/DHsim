@@ -7,7 +7,14 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * Lifecycle + Tribe building. Now uses ground height correctly.
+ * Lifecycle + Tribe building.
+ *
+ * Anti-runaway-population guards:
+ *  - MAX_POPULATION hard cap (impregnate() refuses if at/above cap).
+ *  - Birth cooldown on females after giving birth.
+ *  - Lifespan: adults die of old age.
+ *  - Starvation: if hunger stays at 0 for 30 s, the adult dies.
+ *  - Tribe-aware house building (only builds if the TRIBE needs a house).
  */
 public final class Eater {
 
@@ -28,6 +35,13 @@ public final class Eater {
     };
 
     public static void initTextures(Texture[] textures) { typeTextures = textures; }
+
+    // ---- Balance ----
+    public static final int MAX_POPULATION = 60;
+    private static final float BIRTH_COOLDOWN = 120f;
+    private static final float ADULT_LIFESPAN_MIN = 900f;   // 15 min
+    private static final float ADULT_LIFESPAN_MAX = 1500f;  // 25 min
+    private static final float STARVE_TIMER = 30f;
 
     private static final String SFX_EAT           = "mp3/eating-champ-with-burp.mp3";
     private static final String SFX_MEOW          = "mp3/miau-muzhskoi.mp3";
@@ -85,6 +99,12 @@ public final class Eater {
     private final Vector3f pos = new Vector3f();
     private Tribe tribe;
     private float hunger = 100f;
+    private float starveAccum = 0f;
+
+    private float age = 0f;
+    private float lifespan = 0f;
+    private float birthCooldown = 0f;
+    private boolean dead = false;
 
     private float timer, stateTimer, growTimer, pregnancyTimer;
 
@@ -108,6 +128,7 @@ public final class Eater {
 
     private Audio.Handle eatSound;
     private Vector3f camPos = new Vector3f();
+    private List<Eater> worldEaters;
 
     public Eater(Type type, float x, float z, Tribe tribe, Random rng) {
         this.type = type;
@@ -117,6 +138,7 @@ public final class Eater {
         this.gluttonous = rng.nextFloat() < GLUTTON_CHANCE;
         this.fatThreshold = 5 + rng.nextInt(6);
         this.muscleThreshold = 4 + rng.nextInt(2);
+        this.lifespan = ADULT_LIFESPAN_MIN + rng.nextFloat() * (ADULT_LIFESPAN_MAX - ADULT_LIFESPAN_MIN);
         initStateForType();
         rebuildSprite();
         syncSpritePosition();
@@ -127,6 +149,7 @@ public final class Eater {
     public Type type() { return type; }
     public Sprite sprite() { return sprite; }
     public Vector3f position() { return pos; }
+    public boolean isDead() { return dead; }
 
     public void setMother(Eater m, boolean keepSuckleInYoungBoy) {
         this.mother = m;
@@ -139,21 +162,43 @@ public final class Eater {
 
     public void render(ShaderProgram shader, Matrix4f view, Matrix4f projection,
                        Vector3f cameraPos, float time) {
-        if (sprite != null) sprite.render(shader, view, projection, cameraPos, time);
+        if (sprite != null && !dead) sprite.render(shader, view, projection, cameraPos, time);
     }
 
     public void renderShadow(ShaderProgram shadowShader, Matrix4f lightVP,
                              Vector3f lightDir, float time) {
-        if (sprite != null) sprite.renderShadow(shadowShader, lightVP, lightDir, time);
+        if (sprite != null && !dead) sprite.renderShadow(shadowShader, lightVP, lightDir, time);
     }
 
     public void update(float dt, List<Poop> poops, List<Eater> allEaters,
                        List<Eater> newbornsOut, WorldManager world, Vector3f cameraPos) {
+        if (dead) return;
         this.camPos = cameraPos;
+        this.worldEaters = allEaters;
 
-        if (type != Type.BABY && type != Type.YOUNG_BOY) {
+        // Aging & death
+        age += dt;
+        if (birthCooldown > 0) birthCooldown -= dt;
+
+        boolean isAdult = type == Type.TEEN || type == Type.FAT
+                || type == Type.FEMALE || type == Type.MUSCULAR;
+        if (isAdult) {
             hunger -= HUNGER_DROP_RATE * dt;
-            if (hunger < 0) hunger = 0;
+            if (hunger <= 0f) {
+                hunger = 0f;
+                starveAccum += dt;
+                if (starveAccum >= STARVE_TIMER) {
+                    dead = true;
+                    return;
+                }
+            } else {
+                starveAccum = 0f;
+            }
+
+            if (age >= lifespan) {
+                dead = true;
+                return;
+            }
         }
 
         if (cryTimer > 0f) {
@@ -165,12 +210,11 @@ public final class Eater {
             case TEEN, FAT -> updateAdultMale(dt, poops, allEaters, world);
             case MUSCULAR  -> updateMuscular(dt, world);
             case FEMALE    -> updateFemale(dt, newbornsOut, world);
-            case PREGNANT  -> updatePregnant(dt, newbornsOut);
+            case PREGNANT  -> updatePregnant(dt, newbornsOut, allEaters.size());
             case BABY      -> updateBaby(dt);
             case YOUNG_BOY -> updateYoungBoy(dt, poops, allEaters);
         }
-        
-        // Update ground height dynamically as NPC walks
+
         pos.y = Ground.getHeightAt(pos.x, pos.z);
         syncSpritePosition();
     }
@@ -185,9 +229,16 @@ public final class Eater {
         return Math.max(0.05f, Math.min(1f, 10f / (10f + d)));
     }
 
-    // (Rest of the logic remains identical to previous version)
-    
-    private void updateAdultMale(float dt, List<Poop> poops, List<Eater> allEaters, WorldManager world) {
+    private int countTribeMembers(List<Eater> allEaters) {
+        if (tribe == null) return 0;
+        int n = 0;
+        for (Eater e : allEaters) if (!e.dead && e.tribe == tribe) n++;
+        return n;
+    }
+
+    // ====================================================================
+    private void updateAdultMale(float dt, List<Poop> poops, List<Eater> allEaters,
+                                  WorldManager world) {
         switch (state) {
             case SEARCH -> {
                 timer -= dt;
@@ -211,7 +262,8 @@ public final class Eater {
                     }
                 }
 
-                if (tribe != null && tribe.canBuild() && tribe.needsHouse(allEaters.size())) {
+                int tribePop = countTribeMembers(allEaters);
+                if (tribe != null && tribe.canBuild() && tribe.needsHouse(tribePop)) {
                     state = State.SEEK_BUILD;
                     break;
                 }
@@ -259,6 +311,7 @@ public final class Eater {
         state = State.EAT;
         timer = EAT_TIME;
         hunger = 100f;
+        starveAccum = 0f;
         eatSound = Audio.playLoop(SFX_EAT, EAT_TIME, volumeFor());
     }
 
@@ -299,7 +352,8 @@ public final class Eater {
             Eater best = null;
             float bestD2 = SEEK_FEMALE_RADIUS * SEEK_FEMALE_RADIUS;
             for (Eater e : allEaters) {
-                if (e == this || e.type != Type.FEMALE || e.isPregnantOrGestating()) continue;
+                if (e == this || e.dead || e.type != Type.FEMALE || e.isPregnantOrGestating()) continue;
+                if (e.birthCooldown > 0) continue;
                 float dx = e.pos.x - pos.x, dz = e.pos.z - pos.z;
                 float d2 = dx * dx + dz * dz;
                 if (d2 < bestD2) { bestD2 = d2; best = e; }
@@ -310,7 +364,7 @@ public final class Eater {
     }
 
     private void updateSeekFemale(float dt) {
-        if (targetFemale == null || targetFemale.type != Type.FEMALE
+        if (targetFemale == null || targetFemale.dead || targetFemale.type != Type.FEMALE
                 || targetFemale.isPregnantOrGestating()) {
             targetFemale = null; state = State.REST; timer = 5f + rng.nextFloat() * 5f; return;
         }
@@ -327,7 +381,7 @@ public final class Eater {
     private void updateSatisfy(float dt) {
         stateTimer -= dt;
         if (stateTimer > 0f) return;
-        if (targetFemale != null) {
+        if (targetFemale != null && !targetFemale.dead) {
             Audio.playOnce(SFX_KISS, volumeFor());
             targetFemale.impregnate();
             kissCount++;
@@ -378,7 +432,6 @@ public final class Eater {
             if (sprite != null) sprite.setScale(1f);
             int gained = world.finishChop(targetTree);
             if (tribe != null) tribe.wood += gained;
-            System.out.println("[TRIBE " + (tribe != null ? tribe.id : -1) + "] Chopped tree (+" + gained + " wood, total " + (tribe != null ? tribe.wood : 0) + ")");
             targetTree.reserved = false;
             targetTree = null;
             state = State.SEARCH;
@@ -406,21 +459,24 @@ public final class Eater {
             if (sprite != null) sprite.setScale(1f);
             HouseInstance h = world.buildHouseForTribe(tribe);
             if (h != null) {
-                System.out.println("[TRIBE " + tribe.id + "] House built! Total: " + tribe.houses.size()
-                        + ", wood left: " + tribe.wood);
+                System.out.println("[TRIBE " + tribe.id + "] House built at ("
+                        + String.format("%.1f", h.x) + ", " + String.format("%.1f", h.z) + "), total: "
+                        + tribe.houses.size() + ", wood: " + tribe.wood);
             }
             state = State.SEARCH;
             timer = 0.5f;
         }
     }
 
+    // ====================================================================
     private void updateMuscular(float dt, WorldManager world) {
         if (state == State.SEEK_BUILD) { updateSeekBuild(dt, world); return; }
         if (state == State.BUILD) { updateBuild(dt, world); return; }
         if (state == State.SEEK_TREE) { updateSeekTree(dt, world); return; }
         if (state == State.CHOP) { updateChop(dt, world); return; }
 
-        if (tribe != null && tribe.canBuild() && tribe.needsHouse(20)) {
+        int tribePop = countTribeMembers(worldEaters);
+        if (tribe != null && tribe.canBuild() && tribe.needsHouse(tribePop)) {
             state = State.SEEK_BUILD; return;
         }
 
@@ -438,6 +494,7 @@ public final class Eater {
         }
     }
 
+    // ====================================================================
     private void updateFemale(float dt, List<Eater> newbornsOut, WorldManager world) {
         switch (state) {
             case WANDER -> {
@@ -459,7 +516,8 @@ public final class Eater {
             case SEEK_BUILD -> updateSeekBuild(dt, world);
             case BUILD -> updateBuild(dt, world);
             default -> {
-                if (tribe != null && tribe.canBuild() && tribe.needsHouse(20)) {
+                int tribePop = countTribeMembers(worldEaters);
+                if (tribe != null && tribe.canBuild() && tribe.needsHouse(tribePop)) {
                     state = State.SEEK_BUILD; return;
                 }
                 WorldManager.TreeData t = world.findNearestTree(pos.x, pos.z, TREE_SEARCH_RADIUS);
@@ -472,28 +530,40 @@ public final class Eater {
         }
     }
 
-    private void updatePregnant(float dt, List<Eater> newbornsOut) {
+    private void updatePregnant(float dt, List<Eater> newbornsOut, int currentPop) {
         pregnancyTimer -= dt;
-        if (pregnancyTimer <= 0f) {
-            Audio.playOnce(SFX_BIRTH, volumeFor());
-            int n = 1 + rng.nextInt(8);
-            Eater mom = this;
-            for (int i = 0; i < n; i++) {
-                float a = rng.nextFloat() * (float) (Math.PI * 2);
-                float r = 0.5f + rng.nextFloat() * 1.5f;
-                Eater baby = new Eater(Type.BABY,
-                        pos.x + (float) Math.cos(a) * r,
-                        pos.z + (float) Math.sin(a) * r, tribe, rng);
-                boolean keepSuckle = rng.nextInt(SUCKLE_YB_ODDS) == 0;
-                baby.setMother(mom, keepSuckle);
-                newbornsOut.add(baby);
-            }
-            becomeType(Type.FEMALE);
+        if (pregnancyTimer > 0f) return;
+
+        Audio.playOnce(SFX_BIRTH, volumeFor());
+        int n = 1 + rng.nextInt(8);
+        int room = Math.max(0, MAX_POPULATION - currentPop);
+        if (n > room) n = room;
+        // Even at cap, allow one child so pregnancies don't get stuck.
+        if (n == 0 && room == 0) n = 1;
+
+        Eater mom = this;
+        for (int i = 0; i < n; i++) {
+            float a = rng.nextFloat() * (float) (Math.PI * 2);
+            float r = 0.5f + rng.nextFloat() * 1.5f;
+            Eater baby = new Eater(Type.BABY,
+                    pos.x + (float) Math.cos(a) * r,
+                    pos.z + (float) Math.sin(a) * r, tribe, rng);
+            boolean keepSuckle = rng.nextInt(SUCKLE_YB_ODDS) == 0;
+            baby.setMother(mom, keepSuckle);
+            newbornsOut.add(baby);
         }
+        becomeType(Type.FEMALE);
+        birthCooldown = BIRTH_COOLDOWN;
     }
 
     private void impregnate() {
         if (type != Type.FEMALE || isPregnantOrGestating()) return;
+        if (birthCooldown > 0f) return;
+        if (worldEaters != null) {
+            int alive = 0;
+            for (Eater e : worldEaters) if (!e.dead) alive++;
+            if (alive >= MAX_POPULATION) return; // refuse at cap
+        }
         pregnancyTimer = GESTATION_TIME;
         state = State.GESTATING;
     }
@@ -504,6 +574,7 @@ public final class Eater {
                 || state == State.PREGNANT_WAIT;
     }
 
+    // ====================================================================
     private void updateBaby(float dt) {
         growTimer -= dt;
         if (growTimer <= 0f) {
@@ -512,7 +583,7 @@ public final class Eater {
             if (!keep) { mother = null; suckleAllowed = false; }
             return;
         }
-        if (mother != null && suckleAllowed) {
+        if (mother != null && suckleAllowed && !mother.dead) {
             suckleTimer -= dt;
             if (suckleTimer <= 0f && state == State.WANDER) state = State.SEEK_MOM;
         }
@@ -527,7 +598,7 @@ public final class Eater {
                 }
             }
             case SEEK_MOM -> {
-                if (mother == null) { state = State.WANDER; break; }
+                if (mother == null || mother.dead) { state = State.WANDER; break; }
                 float dx = mother.pos.x - pos.x, dz = mother.pos.z - pos.z;
                 float d = (float) Math.sqrt(dx * dx + dz * dz);
                 if (d <= SUCKLE_RANGE) {
@@ -550,15 +621,16 @@ public final class Eater {
         }
     }
 
+    // ====================================================================
     private void updateYoungBoy(float dt, List<Poop> poops, List<Eater> allEaters) {
         growTimer -= dt;
         if (growTimer <= 0f) {
-            boolean keepSuckle = suckleAllowed && mother != null;
+            boolean keepSuckle = suckleAllowed && mother != null && !mother.dead;
             becomeType(Type.TEEN);
             if (!keepSuckle) { mother = null; suckleAllowed = false; }
             return;
         }
-        if (mother != null && suckleAllowed) {
+        if (mother != null && suckleAllowed && !mother.dead) {
             suckleTimer -= dt;
             if (suckleTimer <= 0f && (state == State.REST || state == State.WANDER))
                 state = State.SEEK_MOM;
@@ -615,7 +687,7 @@ public final class Eater {
                 Eater chaseTarget = null;
                 int count = 0;
                 for (Eater other : allEaters) {
-                    if (other == this || other.type != Type.YOUNG_BOY) continue;
+                    if (other == this || other.dead || other.type != Type.YOUNG_BOY) continue;
                     float dx = other.pos.x - pos.x, dz = other.pos.z - pos.z;
                     float d2 = dx * dx + dz * dz;
                     if (d2 < 400f) { count++; if (rng.nextInt(count) == 0) chaseTarget = other; }
@@ -635,7 +707,7 @@ public final class Eater {
                 }
             }
             case SEEK_MOM -> {
-                if (mother == null) { state = State.WANDER; break; }
+                if (mother == null || mother.dead) { state = State.WANDER; break; }
                 float dx = mother.pos.x - pos.x, dz = mother.pos.z - pos.z;
                 float d = (float) Math.sqrt(dx * dx + dz * dz);
                 if (d <= SUCKLE_RANGE) {
@@ -658,6 +730,7 @@ public final class Eater {
         }
     }
 
+    // ====================================================================
     private void becomeType(Type newType) {
         this.type = newType;
         switch (newType) {
@@ -665,6 +738,8 @@ public final class Eater {
                 mealsEaten = 0; mature = false; kissCount = 0;
                 gluttonous = rng.nextFloat() < GLUTTON_CHANCE;
                 fatThreshold = 5 + rng.nextInt(6);
+                lifespan = ADULT_LIFESPAN_MIN + rng.nextFloat() * (ADULT_LIFESPAN_MAX - ADULT_LIFESPAN_MIN);
+                age = 0f;
                 state = State.WANDER; pickWalkTarget();
             }
             case PREGNANT -> { state = State.PREGNANT_WAIT; pregnancyTimer = PREGNANT_TIME; }
@@ -674,9 +749,15 @@ public final class Eater {
                 mealsEaten = 0; mature = false;
                 gluttonous = rng.nextFloat() < GLUTTON_CHANCE;
                 fatThreshold = 5 + rng.nextInt(6);
+                lifespan = ADULT_LIFESPAN_MIN + rng.nextFloat() * (ADULT_LIFESPAN_MAX - ADULT_LIFESPAN_MIN);
+                age = 0f;
                 state = State.SEARCH; timer = 0.5f;
             }
-            case MUSCULAR -> { state = State.WANDER; pickWalkTarget(); }
+            case MUSCULAR -> {
+                lifespan = ADULT_LIFESPAN_MIN + rng.nextFloat() * (ADULT_LIFESPAN_MAX - ADULT_LIFESPAN_MIN);
+                age = 0f;
+                state = State.WANDER; pickWalkTarget();
+            }
             case FAT -> { }
         }
         rebuildSprite();
