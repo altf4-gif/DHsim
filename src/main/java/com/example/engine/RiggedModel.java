@@ -27,8 +27,8 @@ public final class RiggedModel {
     private static final float NECK_FRAC     = 0.85f;  // neck at 85% up
     private static final float HIP_FRAC      = 0.48f;  // hips at 48% up
     private static final float SHOULDER_FRAC = 0.80f;  // shoulder joint at 80% up
-    private static final float ARM_X_FRAC    = 0.22f;  // half of arm span at shoulders
-    private static final float LEG_X_FRAC    = 0.12f;  // half of hip width
+    private static final float ARM_X_FRAC    = 0.11f;  // half of arm span at shoulders (УМЕНЬШЕНО: захватывает больше плеча)
+    private static final float LEG_X_FRAC    = 0.06f;  // half of hip width (УМЕНЬШЕНО: захватывает пах)
 
     private final List<Part> parts = new ArrayList<>();
     private final Texture texture;
@@ -112,14 +112,12 @@ public final class RiggedModel {
         float centerX = (minX + maxX) / 2f;
         float centerZ = (minZ + maxZ) / 2f;
         
-        // Cut planes in WORLD Y (absolute). Then convert to centered Y for pivots.
         float worldNeckY     = minY + NECK_FRAC     * height;
         float worldHipY      = minY + HIP_FRAC      * height;
         float worldShoulderY = minY + SHOULDER_FRAC * height;
         float worldArmX      = ARM_X_FRAC           * height;
         float worldLegX      = LEG_X_FRAC           * height;
         
-        // After `- minY` shift in data, these are the same Y values.
         float localNeckY     = NECK_FRAC     * height;
         float localHipY      = HIP_FRAC      * height;
         float localShoulderY = SHOULDER_FRAC * height;
@@ -148,7 +146,6 @@ public final class RiggedModel {
                     }
                     cx /= faceV.size(); cy /= faceV.size();
 
-                    // Classification using WORLD coordinates directly.
                     String part;
                     if (cy > worldNeckY) {
                         part = "Head";
@@ -184,8 +181,6 @@ public final class RiggedModel {
             p.name = name;
             p.count = vIdx.size();
             
-            // PIVOT in the SAME coordinate space as the data (which is `world - centerX/centerY/centerZ`).
-            // After data shift `y - minY`, a world point (wx, wy, wz) becomes (wx - cx, wy - minY, wz - cz).
             p.pivot = switch (name) {
                 case "Head"  -> new Vector3f(0,         localNeckY,     0);
                 case "Torso" -> new Vector3f(0,         localHipY,      0);
@@ -203,7 +198,7 @@ public final class RiggedModel {
                 int v = vIdx.get(i) * 3;
                 int uv = uvIdx.get(i) * 2;
                 data[i*5]   = verts.get(v)     - centerX;
-                data[i*5+1] = verts.get(v+1)   - minY;      // <-- Y relative to FEET
+                data[i*5+1] = verts.get(v+1)   - minY;
                 data[i*5+2] = verts.get(v+2)   - centerZ;
                 data[i*5+3] = uvs.get(uv);
                 data[i*5+4] = uvs.get(uv+1);
@@ -277,8 +272,8 @@ public final class RiggedModel {
             switch (p.name) {
                 case "ArmL" -> {
                     partMat.translate(p.pivot);
-                    partMat.rotateX(swing);   // swing forward/back
-                    partMat.rotateZ(1.5f);    // bring down from T-pose
+                    partMat.rotateX(swing);
+                    partMat.rotateZ(1.5f);
                     partMat.translate(-p.pivot.x, -p.pivot.y, -p.pivot.z);
                 }
                 case "ArmR" -> {
