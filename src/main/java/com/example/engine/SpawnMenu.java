@@ -9,7 +9,7 @@ public final class SpawnMenu {
         SPAWN_BABY, SPAWN_YOUNG_BOY,
         SPAWN_POOP, SPAWN_BRIGHT_POOP, SPAWN_POOP_CLUSTER,
         SPAWN_COMBO, SPAWN_TEEN_CROWD,
-        SPAWN_MRH_FEMALE // <-- Новый пункт
+        SPAWN_MRH_FEMALE, SPAWN_MRH_KACHOK, SPAWN_MRH_TOLSTIY
     }
 
     private static final String[] LABELS = {
@@ -25,7 +25,9 @@ public final class SpawnMenu {
             "Кучка какашек",
             "Подросток + 5 какашек",
             "Толпа подростков",
-            "Женщина (MrH)" // <-- Новая метка
+            "Женщина (MrH)",
+            "Качок (MrH)",
+            "Толстяк (MrH)"
     };
 
     private static final Action[] ACTIONS = {
@@ -34,20 +36,20 @@ public final class SpawnMenu {
             Action.SPAWN_YOUNG_BOY,
             Action.SPAWN_POOP, Action.SPAWN_BRIGHT_POOP, Action.SPAWN_POOP_CLUSTER,
             Action.SPAWN_COMBO, Action.SPAWN_TEEN_CROWD,
-            Action.SPAWN_MRH_FEMALE // <-- Новое действие
+            Action.SPAWN_MRH_FEMALE, Action.SPAWN_MRH_KACHOK, Action.SPAWN_MRH_TOLSTIY
     };
 
     /** 0 = creature texture (index in ICON_TEX), 1 = poop icon, 2 = bright poop icon. */
-    private static final int[] ICON_KIND = { 0, 0, 0, 0, 0, 0, 0, 1, 2, 1, 0, 0, 0 };
+    private static final int[] ICON_KIND = { 0, 0, 0, 0, 0, 0, 0, 1, 2, 1, 0, 0, 0, 0, 0 };
     /** For kind 0, the index inside typeTextures (== Eater.Type.ordinal()). */
-    private static final int[] ICON_TEX  = { 0, 1, 6, 2, 3, 4, 5, -1, -1, -1, 0, 0, 2 }; // 2 = FEMALE
+    private static final int[] ICON_TEX  = { 0, 1, 6, 2, 3, 4, 5, -1, -1, -1, 0, 0, 2, 6, 1 };
 
     private static final float PANEL_W_BASE = 720f;
     private static final float HEADER_BASE  = 110f;
     private static final float FOOTER_BASE  = 50f;
     private static final float GAP_BASE     = 6f;
     private static final float ROW_MAX_BASE = 80f;
-    private static final float ROW_MIN      = 28f; // Уменьшено для 13 строк
+    private static final float ROW_MIN      = 20f;
     private static final float ICON_BASE    = 64f;
     private static final float ICON_PAD_BASE= 16f;
 

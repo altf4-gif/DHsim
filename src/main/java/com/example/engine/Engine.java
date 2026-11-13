@@ -13,7 +13,7 @@ import java.util.Random;
 
 public final class Engine {
 
-    private static final String VERSION = "v38 (Female Rigged Model)";
+    private static final String VERSION = "v41 (Lower Shoulders)";
     private static final int TEEN_INDEX = 12;
 
     private static final String SPRITE_VERT = """
@@ -307,15 +307,13 @@ public final class Engine {
         ObjModel tankModel = tryLoad("mesh/Tank", "Tqa");
         ObjModel policeModel = tryLoad("mesh/Police", "hl");
 
-        // --- Rigged Models List ---
         List<RiggedModel> riggedModels = new ArrayList<>();
         
-        // Initial MrH
         String mrhObjPath = "mesh/MrH/meshy-model-2026-11-13T06-34-41-877Z(1).obj";
         String mrhTexPath = "mesh/MrH/texture_21.png";
         if (new File(mrhObjPath).exists()) {
             try {
-                riggedModels.add(new RiggedModel(mrhObjPath, mrhTexPath, 10f, 10f, 2.0f));
+                riggedModels.add(new RiggedModel(mrhObjPath, mrhTexPath, 10f, 10f, 2.0f, 0.15f, 1.5f, 0.80f));
                 System.out.println("  -> MrH loaded.");
             } catch (Exception e) {
                 System.err.println("  [ERROR] Failed to load MrH: " + e.getMessage());
@@ -530,7 +528,6 @@ public final class Engine {
                 if (!newborns.isEmpty()) eaters.addAll(newborns);
                 poops.removeIf(p -> p.eaten);
 
-                // Update rigged models
                 for (RiggedModel m : riggedModels) m.update(dt);
 
                 poopRegenTimer += dt;
@@ -562,7 +559,6 @@ public final class Engine {
                     }
                 }
 
-                // ============ SHADOW PASS ============
                 shadowMap.bind();
                 GL11.glEnable(GL11.GL_DEPTH_TEST);
                 GL11.glDepthMask(true);
@@ -592,7 +588,6 @@ public final class Engine {
                 }
                 shadowMap.unbind(window.width(), window.height());
 
-                // ============ MAIN PASS ============
                 renderer.clear();
                 sky.render(camera, dayNight, weather, now);
 
@@ -624,7 +619,6 @@ public final class Engine {
                 for (HouseInstance t : staticTrees) t.render(houseShader, camera.view(), camera.projection());
                 for (HouseInstance p : staticProps) p.render(houseShader, camera.view(), camera.projection());
                 
-                // Draw rigged models
                 for (RiggedModel m : riggedModels) m.render(houseShader, camera.view(), camera.projection());
                 
                 houseShader.unbind();
@@ -659,7 +653,7 @@ public final class Engine {
                 GL11.glDisable(GL11.GL_BLEND);
 
                 ui.begin(window.width(), window.height());
-                hud.render(ui, window.width(), window.height(), eaters.size() + riggedModels.size(), // <-- Добавили ригед модели в счетчик
+                hud.render(ui, window.width(), window.height(), eaters.size() + riggedModels.size(),
                         dayNight.timeOfDay(), weather.state().name(), Audio.isMuted());
                 if (encyclopedia.isOpen()) encyclopedia.render(ui, window.width(), window.height());
                 if (spawnMenu.isOpen())    spawnMenu.render(ui, window.width(), window.height());
@@ -756,13 +750,35 @@ public final class Engine {
                 String tex = "mesh/MrH/ww/texture_21.png";
                 if (new File(obj).exists()) {
                     try {
-                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 1.7f));
-                        System.out.println("[SPAWN] MrH Female spawned.");
+                        // Женщина: стандартные параметры
+                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 1.7f, 0.15f, 1.5f, 0.80f));
                     } catch (Exception e) {
                         System.err.println("[ERROR] Failed to load Female: " + e.getMessage());
                     }
-                } else {
-                    System.err.println("[ERROR] Female model not found at " + obj);
+                }
+            }
+            case SPAWN_MRH_KACHOK -> {
+                String obj = "mesh/MrH/kk/kachok.obj";
+                String tex = "mesh/MrH/kk/texture_84.png";
+                if (new File(obj).exists()) {
+                    try {
+                        // Качок: плечо опущено на 72% роста (было 80%)
+                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 2.0f, 0.20f, 1.5f, 0.72f));
+                    } catch (Exception e) {
+                        System.err.println("[ERROR] Failed to load Kachok: " + e.getMessage());
+                    }
+                }
+            }
+            case SPAWN_MRH_TOLSTIY -> {
+                String obj = "mesh/MrH/tt/tolstiy.obj";
+                String tex = "mesh/MrH/tt/texture_115.png";
+                if (new File(obj).exists()) {
+                    try {
+                        // Толстяк: плечо опущено на 72% роста
+                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 1.9f, 0.24f, 1.5f, 0.72f));
+                    } catch (Exception e) {
+                        System.err.println("[ERROR] Failed to load Tolstiy: " + e.getMessage());
+                    }
                 }
             }
         }

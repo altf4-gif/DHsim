@@ -43,6 +43,10 @@ public final class ShaderProgram {
         return id;
     }
 
+    public int getId() {
+        return programId;
+    }
+
     public void bind()   { GL20.glUseProgram(programId); }
     public void unbind() { GL20.glUseProgram(0); }
 
@@ -52,6 +56,17 @@ public final class ShaderProgram {
             FloatBuffer buf = stack.mallocFloat(16);
             value.get(buf);
             GL20.glUniformMatrix4fv(loc, false, buf);
+        }
+    }
+
+    public void setUniform(String name, Matrix4f[] values) {
+        for (int i = 0; i < values.length; i++) {
+            int loc = GL20.glGetUniformLocation(programId, name + "[" + i + "]");
+            try (MemoryStack stack = MemoryStack.stackPush()) {
+                FloatBuffer buf = stack.mallocFloat(16);
+                values[i].get(buf);
+                GL20.glUniformMatrix4fv(loc, false, buf);
+            }
         }
     }
 

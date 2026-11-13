@@ -17,23 +17,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 
-/**
- * Procedurally rigged model. No rig.txt needed — proportions are hardcoded.
- * Cut positions are fractions of the model height.
- */
 public final class RiggedModel {
 
-    // ==== Hardcoded proportions (fraction of total height) ====
-    private static final float NECK_FRAC     = 0.85f;  // neck at 85% up
-    private static final float HIP_FRAC      = 0.48f;  // hips at 48% up
-    private static final float SHOULDER_FRAC = 0.80f;  // shoulder joint at 80% up
-    private static final float ARM_X_FRAC    = 0.11f;  // half of arm span at shoulders (УМЕНЬШЕНО: захватывает больше плеча)
-    private static final float LEG_X_FRAC    = 0.06f;  // half of hip width (УМЕНЬШЕНО: захватывает пах)
+    private static final float NECK_FRAC     = 0.85f;
+    private static final float HIP_FRAC      = 0.48f;
+    private static final float LEG_PIVOT_FRAC = 0.08f;
 
     private final List<Part> parts = new ArrayList<>();
     private final Texture texture;
     private final Vector3f pos;
     private float scale;
+    private final float armCutFrac;
+    private final float armDropAngle;
+    private final float shoulderFrac; // <-- НОВЫЙ ПАРАМЕТР
     
     private final Random rng;
     private final Vector3f target = new Vector3f();
@@ -49,9 +45,24 @@ public final class RiggedModel {
     }
 
     public RiggedModel(String objPath, String texPath, float x, float z, float targetHeight) {
+        this(objPath, texPath, x, z, targetHeight, 0.15f, 1.5f, 0.80f);
+    }
+
+    public RiggedModel(String objPath, String texPath, float x, float z, float targetHeight, float armCutFrac) {
+        this(objPath, texPath, x, z, targetHeight, armCutFrac, 1.5f, 0.80f);
+    }
+
+    public RiggedModel(String objPath, String texPath, float x, float z, float targetHeight, float armCutFrac, float armDropAngle) {
+        this(objPath, texPath, x, z, targetHeight, armCutFrac, armDropAngle, 0.80f);
+    }
+
+    public RiggedModel(String objPath, String texPath, float x, float z, float targetHeight, float armCutFrac, float armDropAngle, float shoulderFrac) {
         this.pos = new Vector3f(x, Ground.getHeightAt(x, z), z);
         this.rng = new Random();
         this.texture = texPath != null ? new Texture(texPath, false, false) : null;
+        this.armCutFrac = armCutFrac;
+        this.armDropAngle = armDropAngle;
+        this.shoulderFrac = shoulderFrac;
         
         float modelHeight = loadObj(objPath);
         
@@ -61,7 +72,9 @@ public final class RiggedModel {
             this.scale = 1.0f;
         }
         
-        System.out.println("[RIG] Model height=" + modelHeight + " scale=" + scale);
+        System.out.println("[RIG] " + new java.io.File(objPath).getName()
+                + " h=" + modelHeight + " scale=" + scale
+                + " cut=" + armCutFrac + " drop=" + armDropAngle + " shldr=" + shoulderFrac);
         
         pickNewTarget();
     }
@@ -108,19 +121,23 @@ public final class RiggedModel {
         }
 
         float height = maxY - minY;
+        float width = maxX - minX;
         if (height <= 0.01f) height = 1.0f;
+        if (width <= 0.01f) width = height;
+        
         float centerX = (minX + maxX) / 2f;
         float centerZ = (minZ + maxZ) / 2f;
         
         float worldNeckY     = minY + NECK_FRAC     * height;
         float worldHipY      = minY + HIP_FRAC      * height;
-        float worldShoulderY = minY + SHOULDER_FRAC * height;
-        float worldArmX      = ARM_X_FRAC           * height;
-        float worldLegX      = LEG_X_FRAC           * height;
+        float worldShoulderY = minY + shoulderFrac  * height; // <-- используем параметр
+        
+        float armCutX   = width * armCutFrac;
+        float legPivotX = width * LEG_PIVOT_FRAC;
         
         float localNeckY     = NECK_FRAC     * height;
         float localHipY      = HIP_FRAC      * height;
-        float localShoulderY = SHOULDER_FRAC * height;
+        float localShoulderY = shoulderFrac  * height; // <-- используем параметр
 
         try (BufferedReader br = new BufferedReader(new FileReader(path))) {
             String line;
@@ -150,8 +167,8 @@ public final class RiggedModel {
                     if (cy > worldNeckY) {
                         part = "Head";
                     } else if (cy > worldHipY) {
-                        if (cx < -worldArmX) part = "ArmL";
-                        else if (cx > worldArmX) part = "ArmR";
+                        if (cx < -armCutX) part = "ArmL";
+                        else if (cx > armCutX) part = "ArmR";
                         else part = "Torso";
                     } else {
                         if (cx < 0) part = "LegL";
@@ -182,16 +199,14 @@ public final class RiggedModel {
             p.count = vIdx.size();
             
             p.pivot = switch (name) {
-                case "Head"  -> new Vector3f(0,         localNeckY,     0);
-                case "Torso" -> new Vector3f(0,         localHipY,      0);
-                case "ArmL"  -> new Vector3f(-worldArmX, localShoulderY, 0);
-                case "ArmR"  -> new Vector3f( worldArmX, localShoulderY, 0);
-                case "LegL"  -> new Vector3f(-worldLegX, localHipY,      0);
-                case "LegR"  -> new Vector3f( worldLegX, localHipY,      0);
+                case "Head"  -> new Vector3f(0,          localNeckY,     0);
+                case "Torso" -> new Vector3f(0,          localHipY,      0);
+                case "ArmL"  -> new Vector3f(-armCutX,   localShoulderY, 0);
+                case "ArmR"  -> new Vector3f( armCutX,   localShoulderY, 0);
+                case "LegL"  -> new Vector3f(-legPivotX, localHipY,      0);
+                case "LegR"  -> new Vector3f( legPivotX, localHipY,      0);
                 default      -> new Vector3f(0, 0, 0);
             };
-            
-            System.out.println("[RIG] " + name + ": " + (p.count / 3) + " tris, pivot=" + p.pivot);
             
             float[] data = new float[p.count * 5];
             for (int i = 0; i < p.count; i++) {
@@ -272,14 +287,14 @@ public final class RiggedModel {
             switch (p.name) {
                 case "ArmL" -> {
                     partMat.translate(p.pivot);
+                    partMat.rotateZ(armDropAngle);
                     partMat.rotateX(swing);
-                    partMat.rotateZ(1.5f);
                     partMat.translate(-p.pivot.x, -p.pivot.y, -p.pivot.z);
                 }
                 case "ArmR" -> {
                     partMat.translate(p.pivot);
+                    partMat.rotateZ(-armDropAngle);
                     partMat.rotateX(-swing);
-                    partMat.rotateZ(-1.5f);
                     partMat.translate(-p.pivot.x, -p.pivot.y, -p.pivot.z);
                 }
                 case "LegL" -> {
