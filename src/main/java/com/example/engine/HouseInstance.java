@@ -3,12 +3,12 @@ package com.example.engine;
 import org.joml.Matrix4f;
 
 /**
- * An instance of a composed model (walls + roof + door + windows) placed in the world.
- * Now supports a Y-offset to sink models (e.g. trees) into the ground.
+ * An instance of a composed model (walls + roof + door + windows).
+ * Transform is mutable so the tree chopping animation can shrink trees.
  */
 public final class HouseInstance {
     private final ObjModel walls, roof, door, windows;
-    private final Matrix4f model;
+    private final Matrix4f model = new Matrix4f();
 
     public HouseInstance(ObjModel walls, ObjModel roof, ObjModel door, ObjModel windows,
                          float x, float y, float z, float yaw, float scale) {
@@ -16,7 +16,11 @@ public final class HouseInstance {
         this.roof = roof;
         this.door = door;
         this.windows = windows;
-        this.model = new Matrix4f().translate(x, y, z).rotateY(yaw).scale(scale);
+        setTransform(x, y, z, yaw, scale);
+    }
+
+    public void setTransform(float x, float y, float z, float yaw, float scale) {
+        model.identity().translate(x, y, z).rotateY(yaw).scale(scale);
     }
 
     public void render(ShaderProgram shader, Matrix4f view, Matrix4f proj) {

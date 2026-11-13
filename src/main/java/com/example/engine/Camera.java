@@ -22,6 +22,7 @@ public final class Camera {
 
     private final float moveSpeed = 4.0f;
     private final float mouseSensitivity = 0.12f;
+    private final float fov = 60f;
 
     private float lastX;
     private float lastY;
@@ -32,12 +33,11 @@ public final class Camera {
         updateView();
     }
 
-    /** Rebuilds the perspective matrix. Called every frame from Engine. */
     public void setAspect(float aspect) {
         if (aspect <= 0.0001f) aspect = 1f;
         if (Math.abs(aspect - lastAspect) < 0.0001f) return;
         lastAspect = aspect;
-        projection.identity().perspective((float) Math.toRadians(60f), aspect, 0.1f, 1000f);
+        projection.identity().perspective((float) Math.toRadians(fov), aspect, 0.1f, 1000f);
     }
 
     public void update(Window window, float dt) {
@@ -48,7 +48,7 @@ public final class Camera {
 
     private void processKeyboard(Window window, float dt) {
         Vector3f front = frontVector();
-        Vector3f right = new Vector3f(front).cross(new Vector3f(0f, 1f, 0f)).normalize();
+        Vector3f right = rightVector();
         Vector3f move = new Vector3f();
 
         if (window.isKeyPressed(GLFW.GLFW_KEY_W)) move.add(front);
@@ -91,15 +91,10 @@ public final class Camera {
         }
     }
 
-    /**
-     * Call after the cursor is re-captured (e.g. a menu closed) so the camera
-     * does not snap to the new cursor position.
-     */
     public void resetMouseLook() {
         firstMouse = true;
     }
 
-    /** Unit vector the camera is currently looking along. */
     public Vector3f frontVector() {
         double yawRad = Math.toRadians(yaw);
         double pitchRad = Math.toRadians(pitch);
@@ -110,21 +105,22 @@ public final class Camera {
         ).normalize();
     }
 
+    public Vector3f rightVector() {
+        return new Vector3f(frontVector()).cross(new Vector3f(0f, 1f, 0f)).normalize();
+    }
+
+    public Vector3f upVector() {
+        return new Vector3f(rightVector()).cross(frontVector()).normalize();
+    }
+
     private void updateView() {
         Vector3f front = frontVector();
         Vector3f target = new Vector3f(position).add(front);
         view.identity().lookAt(position, target, new Vector3f(0f, 1f, 0f));
     }
 
-    public Matrix4f view() {
-        return view;
-    }
-
-    public Matrix4f projection() {
-        return projection;
-    }
-
-    public Vector3f position() {
-        return position;
-    }
+    public Matrix4f view() { return view; }
+    public Matrix4f projection() { return projection; }
+    public Vector3f position() { return position; }
+    public float fov() { return fov; }
 }

@@ -1,8 +1,10 @@
 package com.example.engine;
 
+import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL13;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -11,23 +13,19 @@ import java.util.Random;
 
 public final class Engine {
 
-    private static final String VERSION = "v20 (Fixed Tree Spawning)";
-
+    private static final String VERSION = "v28 (Flat Building Pads)";
     private static final int TEEN_INDEX = 12;
 
     private static final String SPRITE_VERT = """
             #version 330 core
             layout (location = 0) in vec2 aPos;
             layout (location = 1) in vec2 aTexCoord;
-
             uniform mat4 uModel;
             uniform mat4 uView;
             uniform mat4 uProjection;
             uniform vec2 uUvOffset;
             uniform vec2 uUvScale;
-
             out vec2 vTexCoord;
-
             void main() {
                 gl_Position = uProjection * uView * uModel * vec4(aPos, 0.0, 1.0);
                 vTexCoord = uUvOffset + aTexCoord * uUvScale;
@@ -39,12 +37,39 @@ public final class Engine {
             in vec2 vTexCoord;
             out vec4 FragColor;
             uniform sampler2D uTexture;
-
+            uniform vec3 uLightTint;
             void main() {
                 vec4 c = texture(uTexture, vTexCoord);
                 if (c.a < 0.1) discard;
                 if (c.r > 0.92 && c.g > 0.92 && c.b > 0.92) discard;
-                FragColor = c;
+                FragColor = vec4(c.rgb * uLightTint, c.a);
+            }
+            """;
+
+    private static final String SPRITE_SHADOW_VERT = """
+            #version 330 core
+            layout (location = 0) in vec2 aPos;
+            layout (location = 1) in vec2 aTexCoord;
+            uniform mat4 uModel;
+            uniform mat4 uLightVP;
+            uniform vec2 uUvOffset;
+            uniform vec2 uUvScale;
+            out vec2 vTexCoord;
+            void main() {
+                gl_Position = uLightVP * uModel * vec4(aPos, 0.0, 1.0);
+                vTexCoord = uUvOffset + aTexCoord * uUvScale;
+            }
+            """;
+
+    private static final String SPRITE_SHADOW_FRAG = """
+            #version 330 core
+            in vec2 vTexCoord;
+            out vec4 FragColor;
+            uniform sampler2D uTexture;
+            void main() {
+                vec4 c = texture(uTexture, vTexCoord);
+                if (c.a < 0.5) discard;
+                if (c.r > 0.92 && c.g > 0.92 && c.b > 0.92) discard;
             }
             """;
 
@@ -56,22 +81,88 @@ public final class Engine {
             uniform mat4 uView;
             uniform mat4 uProjection;
             out vec2 vTexCoord;
+            out vec3 vWorld;
             void main() {
-                gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
+                vec4 world = uModel * vec4(aPos, 1.0);
+                vWorld = world.xyz;
                 vTexCoord = aTexCoord;
+                gl_Position = uProjection * uView * world;
             }
             """;
 
     private static final String HOUSE_FRAG = """
             #version 330 core
             in vec2 vTexCoord;
+            in vec3 vWorld;
+            out vec4 FragColor;
+
+            uniform sampler2D uTexture;
+            uniform sampler2D uShadowMap;
+            uniform mat4 uLightVP;
+            uniform vec3 uSunDir;
+            uniform vec3 uSunColor;
+            uniform vec3 uAmbient;
+            uniform vec3 uCamPos;
+            uniform vec3 uFogColor;
+            uniform float uFogDensity;
+
+            float shadowCalc(vec4 lsp) {
+                vec3 p = lsp.xyz / lsp.w;
+                p = p * 0.5 + 0.5;
+                if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
+                float current = p.z - 0.0025;
+                vec2 ts = 1.0 / textureSize(uShadowMap, 0);
+                float sh = 0.0;
+                for (int x = -1; x <= 1; x++) {
+                    for (int y = -1; y <= 1; y++) {
+                        float d = texture(uShadowMap, p.xy + vec2(x, y) * ts).r;
+                        sh += current > d ? 0.0 : 1.0;
+                    }
+                }
+                return sh / 9.0;
+            }
+
+            void main() {
+                vec4 tex = texture(uTexture, vTexCoord);
+                if (tex.a < 0.1) discard;
+                if (tex.r > 0.92 && tex.g > 0.92 && tex.b > 0.92) discard;
+
+                vec3 n = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
+                float diff = max(dot(n, uSunDir), 0.0);
+
+                float shadow = 1.0;
+                if (diff > 0.0) shadow = shadowCalc(uLightVP * vec4(vWorld, 1.0));
+
+                vec3 lit = tex.rgb * (uAmbient + uSunColor * diff * shadow);
+                float dist = length(vWorld - uCamPos);
+                float fog = 1.0 - exp(-pow(dist * uFogDensity, 2.0));
+                lit = mix(lit, uFogColor, fog);
+                FragColor = vec4(lit, tex.a);
+            }
+            """;
+
+    private static final String SHADOW_VERT = """
+            #version 330 core
+            layout (location = 0) in vec3 aPos;
+            layout (location = 1) in vec2 aTexCoord;
+            uniform mat4 uModel;
+            uniform mat4 uLightVP;
+            out vec2 vTexCoord;
+            void main() {
+                vTexCoord = aTexCoord;
+                gl_Position = uLightVP * uModel * vec4(aPos, 1.0);
+            }
+            """;
+
+    private static final String SHADOW_FRAG = """
+            #version 330 core
+            in vec2 vTexCoord;
             out vec4 FragColor;
             uniform sampler2D uTexture;
             void main() {
                 vec4 c = texture(uTexture, vTexCoord);
-                if (c.a < 0.1) discard;
+                if (c.a < 0.5) discard;
                 if (c.r > 0.92 && c.g > 0.92 && c.b > 0.92) discard;
-                FragColor = c;
             }
             """;
 
@@ -104,11 +195,8 @@ public final class Engine {
             String obj = folder + "/" + base + s + ".obj";
             String mtl = folder + "/" + base + s + ".mtl";
             if (new File(obj).exists()) {
-                try {
-                    return new ObjModel(obj, mtl, null);
-                } catch (Exception e) {
-                    System.err.println("[ERROR] Failed to load " + obj + ": " + e.getMessage());
-                }
+                try { return new ObjModel(obj, mtl, null); }
+                catch (Exception e) { System.err.println("[ERROR] " + obj + ": " + e.getMessage()); }
             }
         }
         return null;
@@ -123,22 +211,33 @@ public final class Engine {
         window.setCursorDisabled(true);
 
         Camera camera = new Camera(window.aspectRatio());
-        ShaderProgram spriteShader = new ShaderProgram(SPRITE_VERT, SPRITE_FRAG);
-        ShaderProgram houseShader  = new ShaderProgram(HOUSE_VERT, HOUSE_FRAG);
+        ShaderProgram spriteShader       = new ShaderProgram(SPRITE_VERT, SPRITE_FRAG);
+        ShaderProgram spriteShadowShader = new ShaderProgram(SPRITE_SHADOW_VERT, SPRITE_SHADOW_FRAG);
+        ShaderProgram houseShader        = new ShaderProgram(HOUSE_VERT, HOUSE_FRAG);
+        ShaderProgram shadowShader       = new ShaderProgram(SHADOW_VERT, SHADOW_FRAG);
+
         Sky sky = new Sky();
         Ground ground = new Ground();
+        Water water = new Water();
+        LineRenderer lineRenderer = new LineRenderer();
         UiRenderer ui = new UiRenderer();
+        ShadowMap shadowMap = new ShadowMap();
+        shadowMap.init();
+        DayNight dayNight = new DayNight();
+        Weather weather = new Weather();
+        WorldManager world = new WorldManager();
+        TribeMarker.init();
+
+        // Rebuild terrain whenever a house reserves a new pad
+        world.onTerrainDirty = ground::rebuild;
 
         GL11.glEnable(GL11.GL_BLEND);
         GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
 
         Texture[] peopleTex = new Texture[PEOPLE_IMAGES.length];
         for (int i = 0; i < PEOPLE_IMAGES.length; i++) {
-            try {
-                peopleTex[i] = new Texture("img/P/" + PEOPLE_IMAGES[i]);
-            } catch (Exception e) {
-                peopleTex[i] = null;
-            }
+            try { peopleTex[i] = new Texture("img/P/" + PEOPLE_IMAGES[i]); }
+            catch (Exception e) { peopleTex[i] = null; }
         }
 
         Texture[] typeTex = {
@@ -158,10 +257,25 @@ public final class Engine {
             int row = i / 9, col = i % 9;
             float x = startX + col * spacingX + (row == 1 ? spacingX * 0.5f : 0f);
             float z = (row == 0) ? -2.0f : 0.0f;
-            sprites.add(new Sprite(peopleTex[i], new Vector3f(x, spriteHeight * 0.5f, z), spriteHeight));
+            float y = Ground.getHeightAt(x, z);
+            sprites.add(new Sprite(peopleTex[i], new Vector3f(x, y + spriteHeight * 0.5f, z), spriteHeight));
         }
 
         Encyclopedia encyclopedia = new Encyclopedia(peopleList);
+
+        // --- Create Tribes ---
+        Tribe redTribe = new Tribe(0, new Vector3f(-40, Ground.getHeightAt(-40, -40), -40), new Vector3f(1f, 0.2f, 0.2f));
+        Tribe blueTribe = new Tribe(1, new Vector3f(40, Ground.getHeightAt(40, -40), -40), new Vector3f(0.2f, 0.5f, 1f));
+        Tribe greenTribe = new Tribe(2, new Vector3f(0, Ground.getHeightAt(0, 50), 50), new Vector3f(0.2f, 1f, 0.2f));
+        world.tribes.add(redTribe);
+        world.tribes.add(blueTribe);
+        world.tribes.add(greenTribe);
+
+        // Flatten pads under initial tribe centers so villages start flat
+        Ground.addPad(redTribe.center.x, redTribe.center.z, 14f, 6f);
+        Ground.addPad(blueTribe.center.x, blueTribe.center.z, 14f, 6f);
+        Ground.addPad(greenTribe.center.x, greenTribe.center.z, 14f, 6f);
+        ground.rebuild();
 
         ObjModel treeModel = tryLoad("mesh/TreeRL", "Tree");
         if (treeModel != null) treeModel.applyFallbackTexture(Texture.generateLeaves());
@@ -171,91 +285,43 @@ public final class Engine {
         ObjModel vDoor  = tryLoad("mesh/VillageHouse", "door");
         ObjModel vWindows = tryLoad("mesh/VillageHouse", "windows");
 
-        ObjModel v2Walls = tryLoad("mesh/VillageHouse2Story", "walls");
-        ObjModel v2Roof  = tryLoad("mesh/VillageHouse2Story", "roof");
-        ObjModel v2Door  = tryLoad("mesh/VillageHouse2Story", "door");
-        ObjModel v2Windows = tryLoad("mesh/VillageHouse2Story", "windows");
+        if (vWalls != null && vRoof != null && vDoor != null && vWindows != null) {
+            world.protoWalls = vWalls;
+            world.protoRoof = vRoof;
+            world.protoDoor = vDoor;
+            world.protoWindows = vWindows;
+            world.protoScale = 6.0f / Math.max(vWalls.getHeight(), vRoof.getHeight());
+        }
 
-        ObjModel dWalls = tryLoad("mesh/DugoutHouse", "walls");
-        ObjModel dRoof  = tryLoad("mesh/DugoutHouse", "roof");
-        ObjModel dDoor  = tryLoad("mesh/DugoutHouse", "door");
-        ObjModel dWindows = tryLoad("mesh/DugoutHouse", "windows");
-
-        List<HouseInstance> houses = new ArrayList<>();
-        List<HouseInstance> trees = new ArrayList<>();
-        List<Vector3f> houseCenters = new ArrayList<>();
+        List<HouseInstance> staticHouses = new ArrayList<>();
+        List<HouseInstance> staticTrees = new ArrayList<>();
         List<Vector3f> occupied = new ArrayList<>();
         Random rng = new Random(42);
 
-        // --- Spawn VillageHouse ---
-        if (vWalls != null) {
-            float scale = 6.0f / Math.max(vWalls.getHeight(), vRoof != null ? vRoof.getHeight() : 1f);
-            int placed = 0, attempts = 0;
-            while (placed < 3 + rng.nextInt(3) && attempts++ < 500) {
-                float x = (rng.nextFloat() - 0.5f) * 150f, z = (rng.nextFloat() - 0.5f) * 150f;
-                if (Math.abs(x) < 20f && Math.abs(z) < 15f) continue;
-                boolean close = false;
-                for (Vector3f p : occupied) if (p.distanceSquared(x, 0, z) < 400f) { close = true; break; }
-                if (close) continue;
-                houseCenters.add(new Vector3f(x, 0, z));
-                occupied.add(new Vector3f(x, 0, z));
-                houses.add(new HouseInstance(vWalls, vRoof, vDoor, vWindows, x, 0, z, (float) Math.atan2(-x, -z), scale));
-                placed++;
-            }
-        }
-
-        // --- Spawn VillageHouse2Story ---
-        if (v2Walls != null) {
-            float scale = 8.5f / Math.max(v2Walls.getHeight(), v2Roof != null ? v2Roof.getHeight() : 1f);
-            int placed = 0, attempts = 0;
-            while (placed < 3 + rng.nextInt(5) && attempts++ < 500) {
-                float x = (rng.nextFloat() - 0.5f) * 150f, z = (rng.nextFloat() - 0.5f) * 150f;
-                if (Math.abs(x) < 20f && Math.abs(z) < 15f) continue;
-                boolean close = false;
-                for (Vector3f p : occupied) if (p.distanceSquared(x, 0, z) < 400f) { close = true; break; }
-                if (close) continue;
-                houseCenters.add(new Vector3f(x, 0, z));
-                occupied.add(new Vector3f(x, 0, z));
-                houses.add(new HouseInstance(v2Walls, v2Roof, v2Door, v2Windows, x, 0, z, (float) Math.atan2(-x, -z), scale));
-                placed++;
-            }
-        }
-
-        // --- Spawn DugoutHouse ---
-        if (dWalls != null) {
-            float scale = 3.5f / Math.max(dWalls.getHeight(), dRoof != null ? dRoof.getHeight() : 1f);
-            int placed = 0, attempts = 0;
-            while (placed < 10 + rng.nextInt(6) && attempts++ < 1000) {
-                float x = (rng.nextFloat() - 0.5f) * 180f, z = (rng.nextFloat() - 0.5f) * 180f;
-                if (Math.abs(x) < 20f && Math.abs(z) < 15f) continue;
-                boolean close = false;
-                for (Vector3f p : occupied) if (p.distanceSquared(x, 0, z) < 150f) { close = true; break; }
-                if (close) continue;
-                houseCenters.add(new Vector3f(x, 0, z));
-                occupied.add(new Vector3f(x, 0, z));
-                houses.add(new HouseInstance(dWalls, dRoof, dDoor, dWindows, x, 0, z, (float) Math.atan2(-x, -z), scale));
-                placed++;
-            }
-        }
-
-        // --- Spawn Trees (placed much further away from houses) ---
+        // Trees spawn
+        List<WorldManager.TreeData> treeDataList = new ArrayList<>();
         if (treeModel != null) {
             float scale = 6.5f / treeModel.getHeight();
             int placed = 0, attempts = 0;
-            while (placed < 100 && attempts++ < 2000) {
+            while (placed < 150 && attempts++ < 2000) {
                 float x = (rng.nextFloat() - 0.5f) * 220f, z = (rng.nextFloat() - 0.5f) * 220f;
                 if (Math.abs(x) < 15f && Math.abs(z) < 15f) continue;
+                float lakeDist = (float)Math.sqrt((x - Ground.LAKE_X)*(x - Ground.LAKE_X) + (z - Ground.LAKE_Z)*(z - Ground.LAKE_Z));
+                if (lakeDist < Ground.LAKE_RADIUS + 5f) continue;
+
                 boolean close = false;
-                // Very large exclusion radius (25m) from houses to prevent clipping
-                for (Vector3f hc : houseCenters) if (hc.distanceSquared(x, 0, z) < 625f) { close = true; break; }
-                // 10m exclusion from other trees
                 for (Vector3f p : occupied) if (p.distanceSquared(x, 0, z) < 100f) { close = true; break; }
                 if (close) continue;
                 occupied.add(new Vector3f(x, 0, z));
-                trees.add(new HouseInstance(treeModel, null, null, null, x, -0.6f, z, rng.nextFloat() * (float)Math.PI * 2f, scale));
+                float yaw = rng.nextFloat() * (float)Math.PI * 2f;
+                float y = Ground.getHeightAt(x, z) - 0.6f;
+
+                HouseInstance inst = new HouseInstance(treeModel, null, null, null, x, y, z, yaw, scale);
+                staticTrees.add(inst);
+                treeDataList.add(new WorldManager.TreeData(inst, x, z, yaw, scale, y));
                 placed++;
             }
-            System.out.println("  -> " + placed + " Trees placed.");
+            world.registerTrees(treeDataList);
         }
 
         Poop.init();
@@ -278,7 +344,9 @@ public final class Engine {
         List<Eater> eaters = new ArrayList<>();
         Random npcRng = new Random(777);
         if (typeTex[Eater.Type.TEEN.ordinal()] != null) {
-            eaters.add(new Eater(Eater.Type.TEEN, startX + 3 * spacingX + 0.6f, -2.0f, npcRng));
+            eaters.add(new Eater(Eater.Type.TEEN, redTribe.center.x + 2f, redTribe.center.z + 2f, redTribe, npcRng));
+            eaters.add(new Eater(Eater.Type.TEEN, blueTribe.center.x + 2f, blueTribe.center.z + 2f, blueTribe, npcRng));
+            eaters.add(new Eater(Eater.Type.TEEN, greenTribe.center.x + 2f, greenTribe.center.z + 2f, greenTribe, npcRng));
         }
 
         SpawnMenu spawnMenu = new SpawnMenu(typeTex, poopIcon, brightPoopIcon);
@@ -286,6 +354,11 @@ public final class Engine {
         float lastTime = (float) GLFW.glfwGetTime();
         boolean tabWasPressed = false, qWasPressed = false, escWasPressed = false;
         boolean upWasPressed = false, downWasPressed = false, leftWasPressed = false;
+        boolean tWasPressed = false;
+
+        Matrix4f lightView = new Matrix4f();
+        Matrix4f lightProj = new Matrix4f().ortho(-140f, 140f, -140f, 140f, 1f, 500f);
+        Matrix4f lightVP = new Matrix4f();
 
         try {
             while (!window.shouldClose()) {
@@ -320,6 +393,11 @@ public final class Engine {
                 }
                 tabWasPressed = window.isKeyPressed(GLFW.GLFW_KEY_TAB);
 
+                if (window.isKeyPressed(GLFW.GLFW_KEY_T) && !tWasPressed) {
+                    dayNight.toggleSpeed();
+                }
+                tWasPressed = window.isKeyPressed(GLFW.GLFW_KEY_T);
+
                 if (spawnMenu.isOpen()) {
                     double[] cp = window.cursorPos();
                     int idx = spawnMenu.hitTest(window.width(), window.height(), cp[0], cp[1]);
@@ -327,7 +405,7 @@ public final class Engine {
                     boolean left = window.isMouseButtonPressed(GLFW.GLFW_MOUSE_BUTTON_LEFT);
                     if (left && !leftWasPressed && idx >= 0) {
                         SpawnMenu.Action a = spawnMenu.actionAt(idx);
-                        if (a != null) spawnFromMenu(a, camera, poops, eaters, npcRng);
+                        if (a != null) spawnFromMenu(a, camera, poops, eaters, npcRng, world.tribes);
                     }
                     leftWasPressed = left;
                 } else {
@@ -344,34 +422,112 @@ public final class Engine {
                 camera.setAspect(window.aspectRatio());
                 if (!spawnMenu.isOpen() && !encyclopedia.isOpen()) camera.update(window, dt);
 
+                dayNight.update(dt);
+                weather.update(dt);
+
+                Vector3f sunDir   = dayNight.sunDir();
+                Vector3f sunColor = dayNight.sunColor();
+                Vector3f ambient  = dayNight.ambient();
+                Vector3f fogColor = dayNight.fogColor();
+                float fogDensity  = dayNight.fogDensity();
+
+                float sunIntensity = dayNight.sunIntensity() * weather.sunIntensityModifier();
+                sunColor.mul(weather.sunIntensityModifier());
+                ambient.mul(weather.ambientDampening());
+
+                Vector3f eye = new Vector3f(sunDir).mul(200f);
+                if (Math.abs(sunDir.y) > 0.99f) { eye.x += 0.001f; eye.z += 0.001f; }
+                lightView.identity().lookAt(eye.x, eye.y, eye.z, 0, 0, 0, 0, 1, 0);
+                lightVP.set(lightProj).mul(lightView);
+
                 List<Eater> newborns = new ArrayList<>();
-                for (Eater e : eaters) e.update(dt, poops, eaters, newborns, camera.position());
+                for (Eater e : eaters) e.update(dt, poops, eaters, newborns, world, camera.position());
                 if (!newborns.isEmpty()) eaters.addAll(newborns);
                 poops.removeIf(p -> p.eaten);
 
-                renderer.clear();
-                sky.render();
-                ground.render(camera.view(), camera.projection());
+                if (sunIntensity > 0.05f) {
+                    shadowMap.bind();
+                    GL11.glEnable(GL11.GL_DEPTH_TEST);
+                    GL13.glActiveTexture(GL13.GL_TEXTURE0);
 
-                // --- 1. Opaque objects first (Houses) ---
+                    shadowShader.bind();
+                    shadowShader.setUniform("uLightVP", lightVP);
+                    shadowShader.setUniform1i("uTexture", 0);
+                    for (HouseInstance t : staticTrees) t.render(shadowShader, camera.view(), camera.projection());
+                    for (Tribe tribe : world.tribes) {
+                        for (HouseInstance h : tribe.houses) h.render(shadowShader, camera.view(), camera.projection());
+                    }
+                    shadowShader.unbind();
+
+                    spriteShadowShader.bind();
+                    spriteShadowShader.setUniform("uLightVP", lightVP);
+                    spriteShadowShader.setUniform1i("uTexture", 0);
+                    for (Sprite s : sprites) s.renderShadow(spriteShadowShader, lightVP, sunDir, now);
+                    for (Eater e : eaters)  e.renderShadow(spriteShadowShader, lightVP, sunDir, now);
+                    spriteShadowShader.unbind();
+
+                    shadowMap.unbind(window.width(), window.height());
+                }
+
+                renderer.clear();
+                sky.render(camera, dayNight, weather, now);
+
+                Vector3f camPos = camera.position();
+                ground.render(camera.view(), camera.projection(),
+                        lightVP, shadowMap.textureId(),
+                        sunDir, sunColor, ambient, camPos, fogColor, fogDensity);
+
+                water.render(camera.view(), camera.projection(), dayNight, camPos, now, fogColor, fogDensity);
+
+                GL13.glActiveTexture(GL13.GL_TEXTURE1);
+                GL11.glBindTexture(GL11.GL_TEXTURE_2D, shadowMap.textureId());
+                GL13.glActiveTexture(GL13.GL_TEXTURE0);
+
                 houseShader.bind();
-                for (HouseInstance h : houses) h.render(houseShader, camera.view(), camera.projection());
-                
-                // --- 2. Transparent objects next (Trees) ---
-                // Disable depth writing so transparent leaves don't occlude other objects behind them
+                houseShader.setUniform("uLightVP", lightVP);
+                houseShader.setUniform1i("uShadowMap", 1);
+                houseShader.setUniform1i("uTexture", 0);
+                houseShader.setUniform3f("uSunDir", sunDir.x, sunDir.y, sunDir.z);
+                houseShader.setUniform3f("uSunColor", sunColor.x, sunColor.y, sunColor.z);
+                houseShader.setUniform3f("uAmbient", ambient.x, ambient.y, ambient.z);
+                houseShader.setUniform3f("uCamPos", camPos.x, camPos.y, camPos.z);
+                houseShader.setUniform3f("uFogColor", fogColor.x, fogColor.y, fogColor.z);
+                houseShader.setUniform1f("uFogDensity", fogDensity);
+
                 GL11.glDepthMask(false);
-                for (HouseInstance t : trees) t.render(houseShader, camera.view(), camera.projection());
+                for (HouseInstance t : staticTrees) t.render(houseShader, camera.view(), camera.projection());
                 GL11.glDepthMask(true);
+                
+                for (Tribe tribe : world.tribes) {
+                    for (HouseInstance h : tribe.houses) h.render(houseShader, camera.view(), camera.projection());
+                }
                 houseShader.unbind();
 
                 Poop.begin(camera.view(), camera.projection());
+                Vector3f tint = new Vector3f(
+                        ambient.x + sunColor.x * 0.4f,
+                        ambient.y + sunColor.y * 0.4f,
+                        ambient.z + sunColor.z * 0.4f
+                );
+                Poop.setLightTint(tint.x, tint.y, tint.z);
                 for (Poop p : poops) p.render();
                 Poop.end();
 
                 spriteShader.bind();
+                spriteShader.setUniform3f("uLightTint", tint.x, tint.y, tint.z);
                 for (Sprite s : sprites) s.render(spriteShader, camera.view(), camera.projection(), camera.position(), now);
                 for (Eater e : eaters) e.render(spriteShader, camera.view(), camera.projection(), camera.position(), now);
                 spriteShader.unbind();
+
+                GL11.glEnable(GL11.GL_BLEND);
+                GL11.glDepthMask(false);
+                for (Eater e : eaters) {
+                    if (e.getTribe() != null) {
+                        TribeMarker.render(camera.view(), camera.projection(), e.position().x, e.position().y, e.position().z, 1.2f, e.getTribe().color);
+                    }
+                }
+                GL11.glDepthMask(true);
+                GL11.glDisable(GL11.GL_BLEND);
 
                 if (encyclopedia.isOpen() || spawnMenu.isOpen()) {
                     ui.begin(window.width(), window.height());
@@ -385,12 +541,17 @@ public final class Engine {
         } finally {
             for (Texture t : peopleTex) if (t != null) t.destroy();
             encyclopedia.destroy(); spawnMenu.destroy();
-            if (poopIcon != null) poopIcon.destroy(); if (brightPoopIcon != null) brightPoopIcon.destroy();
+            if (poopIcon != null) poopIcon.destroy();
+            if (brightPoopIcon != null) brightPoopIcon.destroy();
             if (treeModel != null) treeModel.destroy();
             if (vWalls != null) vWalls.destroy(); if (vRoof != null) vRoof.destroy(); if (vDoor != null) vDoor.destroy(); if (vWindows != null) vWindows.destroy();
-            if (v2Walls != null) v2Walls.destroy(); if (v2Roof != null) v2Roof.destroy(); if (v2Door != null) v2Door.destroy(); if (v2Windows != null) v2Windows.destroy();
-            if (dWalls != null) dWalls.destroy(); if (dRoof != null) dRoof.destroy(); if (dDoor != null) dDoor.destroy(); if (dWindows != null) dWindows.destroy();
-            Poop.destroyAll(); ui.destroy(); spriteShader.destroy(); houseShader.destroy(); sky.destroy(); ground.destroy(); window.destroy();
+            shadowMap.destroy();
+            TribeMarker.destroy();
+            lineRenderer.destroy();
+            water.destroy();
+            Poop.destroyAll(); ui.destroy(); spriteShader.destroy(); spriteShadowShader.destroy();
+            houseShader.destroy(); shadowShader.destroy();
+            sky.destroy(); ground.destroy(); window.destroy();
         }
     }
 
@@ -398,20 +559,25 @@ public final class Engine {
         Vector3f front = camera.frontVector();
         float yaw = (float) Math.atan2(front.z, front.x);
         Vector3f cam = camera.position();
-        return new float[]{ cam.x + (float) Math.cos(yaw) * 10f, cam.z + (float) Math.sin(yaw) * 10f };
+        float x = cam.x + (float) Math.cos(yaw) * 10f;
+        float z = cam.z + (float) Math.sin(yaw) * 10f;
+        float y = Ground.getHeightAt(x, z);
+        return new float[]{ x, y, z };
     }
 
-    private static void spawnFromMenu(SpawnMenu.Action action, Camera camera, List<Poop> poops, List<Eater> eaters, Random rng) {
+    private static void spawnFromMenu(SpawnMenu.Action action, Camera camera, List<Poop> poops, List<Eater> eaters, Random rng, List<Tribe> tribes) {
         float[] sp = spawnPoint(camera);
-        float sx = sp[0], sz = sp[1];
+        float sx = sp[0], sy = sp[1], sz = sp[2];
+        Tribe randomTribe = tribes.get(rng.nextInt(tribes.size()));
+
         switch (action) {
-            case SPAWN_TEEN        -> eaters.add(new Eater(Eater.Type.TEEN, sx, sz, rng));
-            case SPAWN_FAT         -> eaters.add(new Eater(Eater.Type.FAT, sx, sz, rng));
-            case SPAWN_MUSCULAR    -> eaters.add(new Eater(Eater.Type.MUSCULAR, sx, sz, rng));
-            case SPAWN_FEMALE      -> eaters.add(new Eater(Eater.Type.FEMALE, sx, sz, rng));
-            case SPAWN_PREGNANT    -> eaters.add(new Eater(Eater.Type.PREGNANT, sx, sz, rng));
-            case SPAWN_BABY        -> eaters.add(new Eater(Eater.Type.BABY, sx, sz, rng));
-            case SPAWN_YOUNG_BOY   -> eaters.add(new Eater(Eater.Type.YOUNG_BOY, sx, sz, rng));
+            case SPAWN_TEEN        -> eaters.add(new Eater(Eater.Type.TEEN, sx, sz, randomTribe, rng));
+            case SPAWN_FAT         -> eaters.add(new Eater(Eater.Type.FAT, sx, sz, randomTribe, rng));
+            case SPAWN_MUSCULAR    -> eaters.add(new Eater(Eater.Type.MUSCULAR, sx, sz, randomTribe, rng));
+            case SPAWN_FEMALE      -> eaters.add(new Eater(Eater.Type.FEMALE, sx, sz, randomTribe, rng));
+            case SPAWN_PREGNANT    -> eaters.add(new Eater(Eater.Type.PREGNANT, sx, sz, randomTribe, rng));
+            case SPAWN_BABY        -> eaters.add(new Eater(Eater.Type.BABY, sx, sz, randomTribe, rng));
+            case SPAWN_YOUNG_BOY   -> eaters.add(new Eater(Eater.Type.YOUNG_BOY, sx, sz, randomTribe, rng));
             case SPAWN_POOP        -> poops.add(Poop.random(sx, sz, rng));
             case SPAWN_BRIGHT_POOP -> poops.add(Poop.bright(sx, sz, rng));
             case SPAWN_POOP_CLUSTER -> {
@@ -422,7 +588,7 @@ public final class Engine {
                 }
             }
             case SPAWN_COMBO -> {
-                eaters.add(new Eater(Eater.Type.TEEN, sx, sz, rng));
+                eaters.add(new Eater(Eater.Type.TEEN, sx, sz, randomTribe, rng));
                 for (int i = 0; i < 5; i++) {
                     float a = rng.nextFloat() * (float) (Math.PI * 2);
                     float r = 1.5f + rng.nextFloat() * 5f;
@@ -433,7 +599,7 @@ public final class Engine {
                 for (int i = 0; i < 5; i++) {
                     float a = rng.nextFloat() * (float) (Math.PI * 2);
                     float r = 0.5f + rng.nextFloat() * 3f;
-                    eaters.add(new Eater(Eater.Type.TEEN, sx + (float) Math.cos(a) * r, sz + (float) Math.sin(a) * r, rng));
+                    eaters.add(new Eater(Eater.Type.TEEN, sx + (float) Math.cos(a) * r, sz + (float) Math.sin(a) * r, randomTribe, rng));
                 }
             }
         }

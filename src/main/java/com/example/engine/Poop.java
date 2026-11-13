@@ -13,10 +13,7 @@ import java.util.List;
 import java.util.Random;
 
 /**
- * Procedural 3D pile of poop — a loving nod to The Binding of Isaac.
- *
- * Bright poops are the rare 5 % variant with a golden tint. Big piles are
- * the 8 % "boss" ones (scale >= 1.5) that fat males specifically seek out.
+ * Procedural 3D poop. Now correctly places itself on terrain height.
  */
 public final class Poop {
 
@@ -24,13 +21,10 @@ public final class Poop {
             #version 330 core
             layout (location = 0) in vec3 aPos;
             layout (location = 1) in vec3 aColor;
-
             uniform mat4 uModel;
             uniform mat4 uView;
             uniform mat4 uProjection;
-
             out vec3 vColor;
-
             void main() {
                 vColor = aColor;
                 gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
@@ -42,11 +36,11 @@ public final class Poop {
             in vec3 vColor;
             out vec4 FragColor;
             uniform float uGold;
-
+            uniform vec3 uLightTint;
             void main() {
                 vec3 gold = vec3(1.0, 0.85, 0.15);
                 vec3 col = mix(vColor, gold, uGold);
-                FragColor = vec4(col, 1.0);
+                FragColor = vec4(col * uLightTint, 1.0);
             }
             """;
 
@@ -58,6 +52,7 @@ public final class Poop {
     private static Variant[] variants;
 
     public final float x;
+    public final float y;
     public final float z;
     public final boolean bright;
     public final boolean big;
@@ -66,11 +61,12 @@ public final class Poop {
     private final Variant variant;
     private final Matrix4f model;
 
-    private Poop(Variant variant, Matrix4f model, float x, float z,
+    private Poop(Variant variant, Matrix4f model, float x, float y, float z,
                  boolean bright, boolean big) {
         this.variant = variant;
         this.model = model;
         this.x = x;
+        this.y = y;
         this.z = z;
         this.bright = bright;
         this.big = big;
@@ -88,11 +84,9 @@ public final class Poop {
     public static Poop random(float x, float z, Random rng) {
         return make(x, z, rng, rng.nextFloat() < BRIGHT_CHANCE);
     }
-
     public static Poop bright(float x, float z, Random rng) {
         return make(x, z, rng, true);
     }
-
     public static Poop normal(float x, float z, Random rng) {
         return make(x, z, rng, false);
     }
@@ -103,14 +97,20 @@ public final class Poop {
         float scale = 0.6f + rng.nextFloat() * 0.7f;
         if (rng.nextFloat() < 0.08f) scale *= 2.1f;
         boolean big = scale >= BIG_THRESHOLD;
-        Matrix4f m = new Matrix4f().translate(x, 0f, z).rotateY(yaw).scale(scale);
-        return new Poop(v, m, x, z, bright, big);
+        
+        float y = Ground.getHeightAt(x, z);
+        Matrix4f m = new Matrix4f().translate(x, y, z).rotateY(yaw).scale(scale);
+        return new Poop(v, m, x, y, z, bright, big);
     }
 
     public static void begin(Matrix4f view, Matrix4f projection) {
         shader.bind();
         shader.setUniform("uView", view);
         shader.setUniform("uProjection", projection);
+    }
+
+    public static void setLightTint(float r, float g, float b) {
+        if (shader != null) shader.setUniform3f("uLightTint", r, g, b);
     }
 
     public void render() {
@@ -121,9 +121,7 @@ public final class Poop {
         GL30.glBindVertexArray(0);
     }
 
-    public static void end() {
-        shader.unbind();
-    }
+    public static void end() { shader.unbind(); }
 
     public static void destroyAll() {
         if (shader != null) { shader.destroy(); shader = null; }
@@ -134,14 +132,10 @@ public final class Poop {
     }
 
     private static final class Variant {
-        final int vao;
-        final int vbo;
-        final int count;
-
+        final int vao, vbo, count;
         private Variant(int vao, int vbo, int count) {
             this.vao = vao; this.vbo = vbo; this.count = count;
         }
-
         void destroy() {
             GL15.glDeleteBuffers(vbo);
             GL30.glDeleteVertexArrays(vao);
@@ -208,9 +202,7 @@ public final class Poop {
                     if (nx * px[i][j] + nz * pz[i][j] < 0f) { nx = -nx; ny = -ny; nz = -nz; }
                     float nl = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
                     if (nl < 1e-6f) { nx = 0f; ny = 1f; nz = 0f; nl = 1f; }
-                    vnx[i][j] = nx / nl;
-                    vny[i][j] = ny / nl;
-                    vnz[i][j] = nz / nl;
+                    vnx[i][j] = nx / nl; vny[i][j] = ny / nl; vnz[i][j] = nz / nl;
                 }
             }
 
