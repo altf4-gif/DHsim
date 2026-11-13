@@ -8,19 +8,21 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.DoubleBuffer;
+import java.nio.IntBuffer;
 
 /**
- * Creates and owns a GLFW window with an OpenGL 3.3 core context.
+ * Creates and owns a fullscreen GLFW window with an OpenGL 3.3 core context.
+ *
+ * The window goes fullscreen on the primary monitor at its native resolution
+ * right after creation. width()/height() report the live framebuffer size, so
+ * everything (camera projection, UI ortho, spawn-menu hit tests) adapts to the
+ * actual resolution automatically.
  */
 public final class Window {
     private final long handle;
-    private final int width;
-    private final int height;
 
-    public Window(int width, int height, String title) {
-        this.width = width;
-        this.height = height;
-        this.handle = createHandle(width, height, title);
+    public Window(int fallbackWidth, int fallbackHeight, String title) {
+        this.handle = createHandle(fallbackWidth, fallbackHeight, title);
     }
 
     private static long createHandle(int width, int height, String title) {
@@ -42,16 +44,19 @@ public final class Window {
             throw new RuntimeException("Failed to create the GLFW window");
         }
 
-        long primary = GLFW.glfwGetPrimaryMonitor();
-        GLFWVidMode vidmode = primary != 0 ? GLFW.glfwGetVideoMode(primary) : null;
-        if (vidmode != null) {
-            GLFW.glfwSetWindowPos(handle,
-                    (vidmode.width() - width) / 2,
-                    (vidmode.height() - height) / 2);
-        }
-
         GLFW.glfwMakeContextCurrent(handle);
         GLFW.glfwSwapInterval(1);
+
+        // ---- Fullscreen on the primary monitor ----
+        long primary = GLFW.glfwGetPrimaryMonitor();
+        if (primary != 0) {
+            GLFWVidMode mode = GLFW.glfwGetVideoMode(primary);
+            if (mode != null) {
+                GLFW.glfwSetWindowMonitor(handle, primary, 0, 0,
+                        mode.width(), mode.height(), mode.refreshRate());
+            }
+        }
+
         GLFW.glfwShowWindow(handle);
         GL.createCapabilities();
         return handle;
@@ -61,16 +66,30 @@ public final class Window {
         return handle;
     }
 
+    /** Live framebuffer width in pixels (changes when switching to fullscreen). */
     public int width() {
-        return width;
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            IntBuffer w = stack.mallocInt(1);
+            IntBuffer h = stack.mallocInt(1);
+            GLFW.glfwGetFramebufferSize(handle, w, h);
+            return w.get(0);
+        }
     }
 
+    /** Live framebuffer height in pixels. */
     public int height() {
-        return height;
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            IntBuffer w = stack.mallocInt(1);
+            IntBuffer h = stack.mallocInt(1);
+            GLFW.glfwGetFramebufferSize(handle, w, h);
+            return h.get(0);
+        }
     }
 
     public float aspectRatio() {
-        return (float) width / (float) height;
+        int w = width();
+        int h = height();
+        return h == 0 ? 1f : (float) w / (float) h;
     }
 
     public boolean shouldClose() {
@@ -85,13 +104,29 @@ public final class Window {
         return GLFW.glfwGetMouseButton(handle, button) == GLFW.GLFW_PRESS;
     }
 
-    /** Cursor position in window pixels, origin at the top-left corner. */
+    /**
+     * Cursor position scaled to framebuffer pixels, origin at the top-left.
+     * This matches what {@link #width()} / {@link #height()} report, so 2D UI
+     * hit tests line up even on high-DPI displays.
+     */
     public double[] cursorPos() {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             DoubleBuffer x = stack.mallocDouble(1);
             DoubleBuffer y = stack.mallocDouble(1);
             GLFW.glfwGetCursorPos(handle, x, y);
-            return new double[]{x.get(0), y.get(0)};
+
+            IntBuffer ww = stack.mallocInt(1);
+            IntBuffer wh = stack.mallocInt(1);
+            GLFW.glfwGetWindowSize(handle, ww, wh);
+
+            IntBuffer fw = stack.mallocInt(1);
+            IntBuffer fh = stack.mallocInt(1);
+            GLFW.glfwGetFramebufferSize(handle, fw, fh);
+
+            double sx = ww.get(0) > 0 ? (double) fw.get(0) / ww.get(0) : 1.0;
+            double sy = wh.get(0) > 0 ? (double) fh.get(0) / wh.get(0) : 1.0;
+
+            return new double[]{ x.get(0) * sx, y.get(0) * sy };
         }
     }
 

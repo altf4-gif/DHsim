@@ -10,10 +10,10 @@ import java.util.Random;
 
 public final class Engine {
 
-    private static final String VERSION = "v11 (Mouse Spawn Menu)";
+    private static final String VERSION = "v14 (Lifecycle + Sound)";
 
-    /** Index of teenager_male_tpose.png inside PEOPLE_IMAGES. */
     private static final int TEEN_INDEX = 12;
+    private static final boolean SPAWN_HOUSES = false;
 
     private static final String SPRITE_VERT = """
             #version 330 core
@@ -52,13 +52,10 @@ public final class Engine {
             #version 330 core
             layout (location = 0) in vec3 aPos;
             layout (location = 1) in vec2 aTexCoord;
-
             uniform mat4 uModel;
             uniform mat4 uView;
             uniform mat4 uProjection;
-
             out vec2 vTexCoord;
-
             void main() {
                 gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
                 vTexCoord = aTexCoord;
@@ -70,10 +67,7 @@ public final class Engine {
             in vec2 vTexCoord;
             out vec4 FragColor;
             uniform sampler2D uTexture;
-
-            void main() {
-                FragColor = texture(uTexture, vTexCoord);
-            }
+            void main() { FragColor = texture(uTexture, vTexCoord); }
             """;
 
     private static final String[] PEOPLE_IMAGES = {
@@ -84,26 +78,12 @@ public final class Engine {
             "young_boy_tpose.png"
     };
 
-    // Впиши сюда свои описания для каждого персонажа!
-    private static final String[] PEOPLE_DESCRIPTIONS = {
-            "Описание для человека в чёрном пока не добавлено.\n\nОтредактируйте массив PEOPLE_DESCRIPTIONS в Engine.java.",
-            "Описание для ребёнка пока не добавлено.\n\nОтредактируйте массив PEOPLE_DESCRIPTIONS в Engine.java.",
-            "Описание для пожилого мужчины пока не добавлено.\n\nОтредактируйте массив PEOPLE_DESCRIPTIONS в Engine.java.",
-            "Описание для стройной женщины пока не добавлено.\n\nОтредактируйте массив PEOPLE_DESCRIPTIONS в Engine.java.",
-            "Описание для человека в хазмате пока не добавлено.\n\nОтредактируйте массив PEOPLE_DESCRIPTIONS в Engine.java.",
-            "Описание для человека в шинели пока не добавлено.\n\nОтредактируйте массив PEOPLE_DESCRIPTIONS в Engine.java.",
-            "Описание для согнувшегося пока не добавлено.\n\nОтредактируйте массив PEOPLE_DESCRIPTIONS в Engine.java.",
-            "Описание для полицейского пока не добавлено.\n\nОтредактируйте массив PEOPLE_DESCRIPTIONS в Engine.java.",
-            "Описание для человека в рваной форме пока не добавлено.\n\nОтредактируйте массив PEOPLE_DESCRIPTIONS в Engine.java.",
-            "Описание для качка пока не добавлено.\n\nОтредактируйте массив PEOPLE_DESCRIPTIONS в Engine.java.",
-            "Описание для толстяка пока не добавлено.\n\nОтредактируйте массив PEOPLE_DESCRIPTIONS в Engine.java.",
-            "Описание для беременной пока не добавлено.\n\nОтредактируйте массив PEOPLE_DESCRIPTIONS в Engine.java.",
-            "Описание для подростка пока не добавлено.\n\nОтредактируйте массив PEOPLE_DESCRIPTIONS в Engine.java.",
-            "Описание для плаката 'Марс' пока не добавлено.\n\nОтредактируйте массив PEOPLE_DESCRIPTIONS в Engine.java.",
-            "Описание для плаката 'Муякать' пока не добавлено.\n\nОтредактируйте массив PEOPLE_DESCRIPTIONS в Engine.java.",
-            "Описание для плаката 'Симуляция' пока не добавлено.\n\nОтредактируйте массив PEOPLE_DESCRIPTIONS в Engine.java.",
-            "Описание для мальчика пока не добавлено.\n\nОтредактируйте массив PEOPLE_DESCRIPTIONS в Engine.java."
-    };
+    private static final String[] PEOPLE_DESCRIPTIONS = new String[PEOPLE_IMAGES.length];
+    static {
+        for (int i = 0; i < PEOPLE_DESCRIPTIONS.length; i++) {
+            PEOPLE_DESCRIPTIONS[i] = "Описание пока не добавлено.\n\nОтредактируйте массив PEOPLE_DESCRIPTIONS в Engine.java.";
+        }
+    }
 
     private static final String[] PEOPLE_NAMES = {
             "Человек в чёрном", "Ребёнок", "Пожилой мужчина", "Стройная женщина",
@@ -121,12 +101,13 @@ public final class Engine {
         renderer.init();
         window.setCursorDisabled(true);
 
+        System.out.println("Window: " + window.width() + "x" + window.height() + " (fullscreen)");
+
         Camera camera = new Camera(window.aspectRatio());
         ShaderProgram spriteShader = new ShaderProgram(SPRITE_VERT, SPRITE_FRAG);
         ShaderProgram houseShader  = new ShaderProgram(HOUSE_VERT, HOUSE_FRAG);
         Sky sky = new Sky();
         Ground ground = new Ground();
-
         UiRenderer ui = new UiRenderer();
 
         GL11.glEnable(GL11.GL_BLEND);
@@ -143,115 +124,87 @@ public final class Engine {
             }
         }
 
+        Texture[] typeTex = {
+                peopleTex[12],  // TEEN
+                peopleTex[10],  // FAT
+                peopleTex[3],   // FEMALE
+                peopleTex[11],  // PREGNANT
+                peopleTex[1],   // BABY
+                peopleTex[16],  // YOUNG_BOY
+                peopleTex[9],   // MUSCULAR
+        };
+        Eater.initTextures(typeTex);
+
         List<Sprite> sprites = new ArrayList<>();
         List<Person> peopleList = new ArrayList<>();
         final float startX = -4.0f, spacingX = 1.2f, spriteHeight = 1.5f;
 
         for (int i = 0; i < PEOPLE_IMAGES.length; i++) {
             if (peopleTex[i] == null) continue;
-
             peopleList.add(new Person(PEOPLE_NAMES[i], PEOPLE_DESCRIPTIONS[i], peopleTex[i]));
-
-            // The teenager is an NPC, not a static billboard.
             if (i == TEEN_INDEX) continue;
-
-            int row = i / 9;
-            int col = i % 9;
-            float x = startX + col * spacingX;
-            if (row == 1) x += spacingX * 0.5f;
+            int row = i / 9, col = i % 9;
+            float x = startX + col * spacingX + (row == 1 ? spacingX * 0.5f : 0f);
             float z = (row == 0) ? -2.0f : 0.0f;
             sprites.add(new Sprite(peopleTex[i], new Vector3f(x, spriteHeight * 0.5f, z), spriteHeight));
         }
 
         Encyclopedia encyclopedia = new Encyclopedia(peopleList);
-        SpawnMenu spawnMenu = new SpawnMenu();
 
-        System.out.println("Loading house textures from img/H/ ...");
-        Texture texWall = null, texFront = null, texRoof = null;
-        try {
-            texWall  = new Texture("img/H/Hos_L.png", true, false);
-            texFront = new Texture("img/H/Hos_V.png", false, false);
-            texRoof  = new Texture("img/H/Hos_K.png", true, false);
-        } catch (Exception e) {
-            System.err.println("[ERROR] House textures failed: " + e.getMessage());
-        }
-
+        // Houses (disabled for now)
         List<House> houses = new ArrayList<>();
         List<Vector3f> houseCenters = new ArrayList<>();
-        if (texWall != null && texFront != null && texRoof != null) {
-            Random rng = new Random(42);
-            List<Vector3f> placed = new ArrayList<>();
-            int attempts = 0;
-            while (houses.size() < 24 && attempts < 500) {
-                attempts++;
-                float x = (rng.nextFloat() - 0.5f) * 150f;
-                float z = (rng.nextFloat() - 0.5f) * 150f;
-                if (Math.abs(x) < 14f && Math.abs(z) < 12f) continue;
-
-                boolean tooClose = false;
-                for (Vector3f p : placed) {
-                    if (p.distanceSquared(x, 0f, z) < 100f) { tooClose = true; break; }
-                }
-                if (tooClose) continue;
-                placed.add(new Vector3f(x, 0f, z));
-                houseCenters.add(new Vector3f(x, 0f, z));
-
-                float w  = 6f + rng.nextFloat() * 4f;
-                float d  = 7f + rng.nextFloat() * 4f;
-                float h  = 6f + rng.nextFloat() * 6f;
-                float rh = 2.5f + rng.nextFloat() * 2f;
-                float yaw = (float) Math.atan2(-x, -z);
-
-                houses.add(new House(x, z, yaw, w, d, h, rh, texWall, texFront, texRoof));
-            }
+        Texture texWall = null, texFront = null, texRoof = null;
+        if (SPAWN_HOUSES) {
+            try {
+                texWall  = new Texture("img/H/Hos_L.png", true, false);
+                texFront = new Texture("img/H/Hos_V.png", false, false);
+                texRoof  = new Texture("img/H/Hos_K.png", true, false);
+            } catch (Exception e) { System.err.println("[ERROR] House textures: " + e.getMessage()); }
+            // ... (spawn logic omitted, disabled)
         }
 
-        // ------------------------------------------------------------
-        //  Isaac-style poop scattered across the map
-        // ------------------------------------------------------------
-        System.out.println("Scattering poop across the map (Isaac reference)...");
+        System.out.println("Scattering poop across the map...");
         Poop.init();
         List<Poop> poops = new ArrayList<>();
         Random worldRng = new Random(2024);
-        int poopAttempts = 0;
-        while (poops.size() < 90 && poopAttempts < 1200) {
-            poopAttempts++;
+        int attempts = 0;
+        while (poops.size() < 90 && attempts < 1200) {
+            attempts++;
             float x = (worldRng.nextFloat() - 0.5f) * 180f;
             float z = (worldRng.nextFloat() - 0.5f) * 180f;
-
             if (Math.abs(x) < 14f && Math.abs(z) < 8f) continue;
-
             boolean blocked = false;
-            for (Vector3f hc : houseCenters) {
-                if (hc.distanceSquared(x, 0f, z) < 36f) { blocked = true; break; }
-            }
+            for (Vector3f hc : houseCenters) if (hc.distanceSquared(x, 0f, z) < 36f) { blocked = true; break; }
             if (blocked) continue;
-
             poops.add(Poop.random(x, z, worldRng));
         }
-        System.out.println("  -> " + poops.size() + " poops placed.");
+        int bigCount = 0;
+        for (Poop p : poops) if (p.big) bigCount++;
+        System.out.println("  -> " + poops.size() + " poops placed (" + bigCount + " big).");
 
-        // ------------------------------------------------------------
-        //  NPCs
-        // ------------------------------------------------------------
+        System.out.println("Rendering poop preview icons...");
+        UiTexture poopIcon = PoopPreview.render(256, false);
+        GL11.glViewport(0, 0, window.width(), window.height());
+        UiTexture brightPoopIcon = PoopPreview.render(256, true);
+        GL11.glViewport(0, 0, window.width(), window.height());
+
+        // Initial NPC
         List<Eater> eaters = new ArrayList<>();
         Random npcRng = new Random(777);
-        if (peopleTex[TEEN_INDEX] != null) {
-            int row = TEEN_INDEX / 9;
-            int col = TEEN_INDEX % 9;
+        if (typeTex[Eater.Type.TEEN.ordinal()] != null) {
+            int row = TEEN_INDEX / 9, col = TEEN_INDEX % 9;
             float x = startX + col * spacingX + (row == 1 ? spacingX * 0.5f : 0f);
             float z = (row == 0) ? -2.0f : 0.0f;
-            eaters.add(new Eater(peopleTex[TEEN_INDEX], x, z, spriteHeight, npcRng));
+            eaters.add(new Eater(Eater.Type.TEEN, x, z, npcRng));
             System.out.println("  -> 1 teenager awake at (" + x + ", " + z + ")");
         }
 
+        SpawnMenu spawnMenu = new SpawnMenu(typeTex, poopIcon, brightPoopIcon);
+
         float lastTime = (float) GLFW.glfwGetTime();
-        boolean tabWasPressed = false;
-        boolean qWasPressed = false;
-        boolean escWasPressed = false;
-        boolean upWasPressed = false;
-        boolean downWasPressed = false;
-        boolean leftWasPressed = false;
+        boolean tabWasPressed = false, qWasPressed = false, escWasPressed = false;
+        boolean upWasPressed = false, downWasPressed = false, leftWasPressed = false;
 
         try {
             while (!window.shouldClose()) {
@@ -261,54 +214,40 @@ public final class Engine {
 
                 window.pollEvents();
 
-                // ---------- Esc: close a menu, otherwise quit ----------
                 boolean escPressed = window.isKeyPressed(GLFW.GLFW_KEY_ESCAPE);
                 if (escPressed && !escWasPressed) {
                     if (spawnMenu.isOpen()) {
-                        spawnMenu.close();
-                        window.setCursorDisabled(true);
-                        camera.resetMouseLook();
+                        spawnMenu.close(); window.setCursorDisabled(true);
+                        camera.resetMouseLook(); leftWasPressed = true;
                     } else if (encyclopedia.isOpen()) {
-                        encyclopedia.toggle();
-                        window.setCursorDisabled(true);
+                        encyclopedia.toggle(); window.setCursorDisabled(true);
                         camera.resetMouseLook();
-                    } else {
-                        return;
-                    }
+                    } else { return; }
                 }
                 escWasPressed = escPressed;
 
-                // ---------- Q: the one and only menu ----------
                 boolean qPressed = window.isKeyPressed(GLFW.GLFW_KEY_Q);
                 if (qPressed && !qWasPressed) {
                     if (spawnMenu.isOpen()) {
-                        spawnMenu.close();
-                        window.setCursorDisabled(true);
+                        spawnMenu.close(); window.setCursorDisabled(true);
                         camera.resetMouseLook();
                     } else {
-                        if (encyclopedia.isOpen()) {
-                            encyclopedia.toggle();
-                        }
-                        spawnMenu.open();
-                        window.setCursorDisabled(false);
-                        camera.resetMouseLook();
+                        if (encyclopedia.isOpen()) encyclopedia.toggle();
+                        spawnMenu.open(); window.setCursorDisabled(false);
+                        camera.resetMouseLook(); leftWasPressed = true;
                     }
                 }
                 qWasPressed = qPressed;
 
-                // ---------- TAB: encyclopedia (closes the spawn menu) ----------
                 boolean tabPressed = window.isKeyPressed(GLFW.GLFW_KEY_TAB);
                 if (tabPressed && !tabWasPressed) {
-                    if (spawnMenu.isOpen()) {
-                        spawnMenu.close();
-                    }
+                    if (spawnMenu.isOpen()) spawnMenu.close();
                     encyclopedia.toggle();
                     window.setCursorDisabled(!encyclopedia.isOpen());
-                    camera.resetMouseLook();
+                    camera.resetMouseLook(); leftWasPressed = true;
                 }
                 tabWasPressed = tabPressed;
 
-                // ---------- Mouse interaction with the spawn menu ----------
                 if (spawnMenu.isOpen()) {
                     double[] cp = window.cursorPos();
                     int idx = spawnMenu.hitTest(window.width(), window.height(), cp[0], cp[1]);
@@ -317,42 +256,32 @@ public final class Engine {
                     boolean left = window.isMouseButtonPressed(GLFW.GLFW_MOUSE_BUTTON_LEFT);
                     if (left && !leftWasPressed && idx >= 0) {
                         SpawnMenu.Action a = spawnMenu.actionAt(idx);
-                        if (a != null) {
-                            spawnFromMenu(a, camera, peopleTex[TEEN_INDEX],
-                                    poops, eaters, npcRng);
-                        }
+                        if (a != null) spawnFromMenu(a, camera, poops, eaters, npcRng);
                     }
                     leftWasPressed = left;
                 } else {
                     leftWasPressed = false;
                 }
 
-                // ---------- Arrow keys navigate the encyclopedia ----------
                 if (encyclopedia.isOpen()) {
                     boolean upPressed = window.isKeyPressed(GLFW.GLFW_KEY_UP);
                     if (upPressed && !upWasPressed) encyclopedia.prev();
                     upWasPressed = upPressed;
-
                     boolean downPressed = window.isKeyPressed(GLFW.GLFW_KEY_DOWN);
                     if (downPressed && !downWasPressed) encyclopedia.next();
                     downWasPressed = downPressed;
-                } else {
-                    upWasPressed = false;
-                    downWasPressed = false;
-                }
+                } else { upWasPressed = false; downWasPressed = false; }
 
-                // ---------- Camera is frozen while the menu is open ----------
-                if (!spawnMenu.isOpen() && !encyclopedia.isOpen()) {
-                    camera.update(window, dt);
-                }
+                camera.setAspect(window.aspectRatio());
+                if (!spawnMenu.isOpen() && !encyclopedia.isOpen()) camera.update(window, dt);
 
-                // ---------- NPC brain tick ----------
+                List<Eater> newborns = new ArrayList<>();
                 for (Eater e : eaters) {
-                    e.update(dt, poops);
+                    e.update(dt, poops, eaters, newborns, camera.position());
                 }
+                if (!newborns.isEmpty()) eaters.addAll(newborns);
                 poops.removeIf(p -> p.eaten);
 
-                // ---------- draw ----------
                 renderer.clear();
                 sky.render();
                 ground.render(camera.view(), camera.projection());
@@ -372,11 +301,10 @@ public final class Engine {
                     s.render(spriteShader, camera.view(), camera.projection(), camera.position(), now);
                 }
                 for (Eater e : eaters) {
-                    e.sprite().render(spriteShader, camera.view(), camera.projection(), camera.position(), now);
+                    e.render(spriteShader, camera.view(), camera.projection(), camera.position(), now);
                 }
                 spriteShader.unbind();
 
-                // ---------- 2D overlay ----------
                 if (encyclopedia.isOpen() || spawnMenu.isOpen()) {
                     ui.begin(window.width(), window.height());
                     if (encyclopedia.isOpen()) encyclopedia.render(ui, window.width(), window.height());
@@ -393,6 +321,8 @@ public final class Engine {
             if (texRoof  != null) texRoof.destroy();
             encyclopedia.destroy();
             spawnMenu.destroy();
+            if (poopIcon != null) poopIcon.destroy();
+            if (brightPoopIcon != null) brightPoopIcon.destroy();
             Poop.destroyAll();
             ui.destroy();
             spriteShader.destroy();
@@ -403,11 +333,6 @@ public final class Engine {
         }
     }
 
-    // ------------------------------------------------------------------
-    //  Spawn helpers
-    // ------------------------------------------------------------------
-
-    /** Spawn point on the ground, 10 m ahead of the camera (ignoring pitch). */
     private static float[] spawnPoint(Camera camera) {
         Vector3f front = camera.frontVector();
         float yaw = (float) Math.atan2(front.z, front.x);
@@ -419,22 +344,20 @@ public final class Engine {
     }
 
     private static void spawnFromMenu(SpawnMenu.Action action, Camera camera,
-                                      Texture teenTex,
-                                      List<Poop> poops, List<Eater> eaters,
-                                      Random rng) {
+                                      List<Poop> poops, List<Eater> eaters, Random rng) {
         float[] sp = spawnPoint(camera);
-        float sx = sp[0];
-        float sz = sp[1];
+        float sx = sp[0], sz = sp[1];
 
         switch (action) {
-            case SPAWN_TEEN -> {
-                if (teenTex != null) eaters.add(new Eater(teenTex, sx, sz, 1.5f, rng));
-                System.out.println("[SPAWN] 1 подросток @ (" + sx + ", " + sz + ")");
-            }
-            case SPAWN_POOP -> {
-                poops.add(Poop.random(sx, sz, rng));
-                System.out.println("[SPAWN] 1 какашка @ (" + sx + ", " + sz + ")");
-            }
+            case SPAWN_TEEN        -> eaters.add(new Eater(Eater.Type.TEEN, sx, sz, rng));
+            case SPAWN_FAT         -> eaters.add(new Eater(Eater.Type.FAT, sx, sz, rng));
+            case SPAWN_MUSCULAR    -> eaters.add(new Eater(Eater.Type.MUSCULAR, sx, sz, rng));
+            case SPAWN_FEMALE      -> eaters.add(new Eater(Eater.Type.FEMALE, sx, sz, rng));
+            case SPAWN_PREGNANT    -> eaters.add(new Eater(Eater.Type.PREGNANT, sx, sz, rng));
+            case SPAWN_BABY        -> eaters.add(new Eater(Eater.Type.BABY, sx, sz, rng));
+            case SPAWN_YOUNG_BOY   -> eaters.add(new Eater(Eater.Type.YOUNG_BOY, sx, sz, rng));
+            case SPAWN_POOP        -> poops.add(Poop.random(sx, sz, rng));
+            case SPAWN_BRIGHT_POOP -> poops.add(Poop.bright(sx, sz, rng));
             case SPAWN_POOP_CLUSTER -> {
                 for (int i = 0; i < 5; i++) {
                     float a = rng.nextFloat() * (float) (Math.PI * 2);
@@ -442,33 +365,26 @@ public final class Engine {
                     poops.add(Poop.random(sx + (float) Math.cos(a) * r,
                                           sz + (float) Math.sin(a) * r, rng));
                 }
-                System.out.println("[SPAWN] 5 какашек @ (" + sx + ", " + sz + ")");
-            }
-            case SPAWN_TEEN_CROWD -> {
-                if (teenTex != null) {
-                    for (int i = 0; i < 5; i++) {
-                        float a = rng.nextFloat() * (float) (Math.PI * 2);
-                        float r = 0.5f + rng.nextFloat() * 3f;
-                        eaters.add(new Eater(teenTex,
-                                sx + (float) Math.cos(a) * r,
-                                sz + (float) Math.sin(a) * r,
-                                1.5f, rng));
-                    }
-                    System.out.println("[SPAWN] 5 подростков @ (" + sx + ", " + sz + ")");
-                } else {
-                    System.out.println("[SPAWN] подростки недоступны: текстура не загрузилась");
-                }
             }
             case SPAWN_COMBO -> {
-                if (teenTex != null) eaters.add(new Eater(teenTex, sx, sz, 1.5f, rng));
+                eaters.add(new Eater(Eater.Type.TEEN, sx, sz, rng));
                 for (int i = 0; i < 5; i++) {
                     float a = rng.nextFloat() * (float) (Math.PI * 2);
                     float r = 1.5f + rng.nextFloat() * 5f;
                     poops.add(Poop.random(sx + (float) Math.cos(a) * r,
                                           sz + (float) Math.sin(a) * r, rng));
                 }
-                System.out.println("[SPAWN] подросток + 5 какашек @ (" + sx + ", " + sz + ")");
+            }
+            case SPAWN_TEEN_CROWD -> {
+                for (int i = 0; i < 5; i++) {
+                    float a = rng.nextFloat() * (float) (Math.PI * 2);
+                    float r = 0.5f + rng.nextFloat() * 3f;
+                    eaters.add(new Eater(Eater.Type.TEEN,
+                            sx + (float) Math.cos(a) * r,
+                            sz + (float) Math.sin(a) * r, rng));
+                }
             }
         }
+        System.out.println("[SPAWN] " + action + " @ (" + sx + ", " + sz + ")");
     }
 }

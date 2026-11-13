@@ -15,12 +15,8 @@ import java.util.Random;
 /**
  * Procedural 3D pile of poop — a loving nod to The Binding of Isaac.
  *
- * No texture files are required: the mesh is generated from a parametric
- * surface (spiral-ridged cone that tapers to a lean tip) and the shading
- * is baked into per-vertex colours with a simple directional light.
- *
- * Five unique variants are generated once at startup. Every scattered
- * instance picks a random variant, yaw and (occasionally huge) scale.
+ * Bright poops are the rare 5 % variant with a golden tint. Big piles are
+ * the 8 % "boss" ones (scale >= 1.5) that fat males specifically seek out.
  */
 public final class Poop {
 
@@ -45,34 +41,41 @@ public final class Poop {
             #version 330 core
             in vec3 vColor;
             out vec4 FragColor;
+            uniform float uGold;
+
             void main() {
-                FragColor = vec4(vColor, 1.0);
+                vec3 gold = vec3(1.0, 0.85, 0.15);
+                vec3 col = mix(vColor, gold, uGold);
+                FragColor = vec4(col, 1.0);
             }
             """;
 
     private static final int NUM_VARIANTS = 5;
+    private static final float BRIGHT_CHANCE = 0.05f;
+    private static final float BIG_THRESHOLD = 1.5f;
 
     private static ShaderProgram shader;
     private static Variant[] variants;
 
-    /** Ground position — used by the AI to find and eat it. */
     public final float x;
     public final float z;
-
-    /** Set to true once a teenager has finished munching on this pile. */
+    public final boolean bright;
+    public final boolean big;
     public boolean eaten;
 
     private final Variant variant;
     private final Matrix4f model;
 
-    private Poop(Variant variant, Matrix4f model, float x, float z) {
+    private Poop(Variant variant, Matrix4f model, float x, float z,
+                 boolean bright, boolean big) {
         this.variant = variant;
         this.model = model;
         this.x = x;
         this.z = z;
+        this.bright = bright;
+        this.big = big;
     }
 
-    /** Builds the shared shader and the pool of unique poop meshes. Call once. */
     public static void init() {
         if (shader != null) return;
         shader = new ShaderProgram(VERT, FRAG);
@@ -82,15 +85,26 @@ public final class Poop {
         }
     }
 
-    /** Creates one instance with a random variant, yaw, and scale. */
     public static Poop random(float x, float z, Random rng) {
+        return make(x, z, rng, rng.nextFloat() < BRIGHT_CHANCE);
+    }
+
+    public static Poop bright(float x, float z, Random rng) {
+        return make(x, z, rng, true);
+    }
+
+    public static Poop normal(float x, float z, Random rng) {
+        return make(x, z, rng, false);
+    }
+
+    private static Poop make(float x, float z, Random rng, boolean bright) {
         Variant v = variants[rng.nextInt(NUM_VARIANTS)];
         float yaw = rng.nextFloat() * (float) (Math.PI * 2);
         float scale = 0.6f + rng.nextFloat() * 0.7f;
-        // Rare "boss poop" so it is visible from far away
         if (rng.nextFloat() < 0.08f) scale *= 2.1f;
+        boolean big = scale >= BIG_THRESHOLD;
         Matrix4f m = new Matrix4f().translate(x, 0f, z).rotateY(yaw).scale(scale);
-        return new Poop(v, m, x, z);
+        return new Poop(v, m, x, z, bright, big);
     }
 
     public static void begin(Matrix4f view, Matrix4f projection) {
@@ -101,6 +115,7 @@ public final class Poop {
 
     public void render() {
         shader.setUniform("uModel", model);
+        shader.setUniform1f("uGold", bright ? 0.55f : 0.0f);
         GL30.glBindVertexArray(variant.vao);
         GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, variant.count);
         GL30.glBindVertexArray(0);
@@ -111,28 +126,20 @@ public final class Poop {
     }
 
     public static void destroyAll() {
-        if (shader != null) {
-            shader.destroy();
-            shader = null;
-        }
+        if (shader != null) { shader.destroy(); shader = null; }
         if (variants != null) {
             for (Variant v : variants) v.destroy();
             variants = null;
         }
     }
 
-    // ------------------------------------------------------------------
-    //  One generated mesh (VAO + VBO) shared by many instances.
-    // ------------------------------------------------------------------
     private static final class Variant {
         final int vao;
         final int vbo;
         final int count;
 
         private Variant(int vao, int vbo, int count) {
-            this.vao = vao;
-            this.vbo = vbo;
-            this.count = count;
+            this.vao = vao; this.vbo = vbo; this.count = count;
         }
 
         void destroy() {
@@ -144,7 +151,6 @@ public final class Poop {
             final int RINGS = 28;
             final int SIDES = 32;
 
-            // ---- shape parameters (randomized per variant) ----
             float height     = 1.0f;
             float baseRadius = 0.42f + rng.nextFloat() * 0.08f;
             float lean       = 0.06f + rng.nextFloat() * 0.07f;
@@ -155,38 +161,31 @@ public final class Poop {
             float phase      = rng.nextFloat() * (float) (Math.PI * 2);
             float tipPinch   = 0.55f + rng.nextFloat() * 0.20f;
 
-            // ---- base colour (brown with slight variation) ----
             float cr = 0.32f + rng.nextFloat() * 0.06f;
             float cg = 0.20f + rng.nextFloat() * 0.05f;
             float cb = 0.10f + rng.nextFloat() * 0.03f;
 
-            // ---- 1. sample the surface into a grid ----
             float[][] px = new float[RINGS + 1][SIDES];
             float[][] py = new float[RINGS + 1][SIDES];
             float[][] pz = new float[RINGS + 1][SIDES];
 
             for (int i = 0; i <= RINGS; i++) {
                 float t = (float) i / RINGS;
-
                 float rBase = baseRadius * (float) Math.pow(1.0f - t, 0.72f);
-                rBase *= (1.0f - t * tipPinch);   // squeeze the tip to a point
-
+                rBase *= (1.0f - t * tipPinch);
                 float ox = (float) Math.cos(leanAngle) * lean * t * t;
                 float oz = (float) Math.sin(leanAngle) * lean * t * t;
                 float y  = t * height;
-
                 for (int j = 0; j < SIDES; j++) {
                     float angle  = (float) (2.0 * Math.PI * j / SIDES);
                     float spiral = angle * ridgeCount + twist * t + phase;
                     float r = rBase * (1.0f + ridgeAmp * (float) Math.sin(spiral));
-
                     px[i][j] = ox + r * (float) Math.cos(angle);
                     py[i][j] = y;
                     pz[i][j] = oz + r * (float) Math.sin(angle);
                 }
             }
 
-            // ---- 2. smooth per-vertex normals (finite differences) ----
             float[][] vnx = new float[RINGS + 1][SIDES];
             float[][] vny = new float[RINGS + 1][SIDES];
             float[][] vnz = new float[RINGS + 1][SIDES];
@@ -197,67 +196,48 @@ public final class Poop {
                 for (int j = 0; j < SIDES; j++) {
                     int jm = (j - 1 + SIDES) % SIDES;
                     int jp = (j + 1) % SIDES;
-
                     float ttx = px[ip][j] - px[im][j];
                     float tty = py[ip][j] - py[im][j];
                     float ttz = pz[ip][j] - pz[im][j];
-
                     float atx = px[i][jp] - px[i][jm];
                     float aty = py[i][jp] - py[i][jm];
                     float atz = pz[i][jp] - pz[i][jm];
-
                     float nx = tty * atz - ttz * aty;
                     float ny = ttz * atx - ttx * atz;
                     float nz = ttx * aty - tty * atx;
-
-                    // Make sure the normal points outward (away from the Y axis)
-                    if (nx * px[i][j] + nz * pz[i][j] < 0f) {
-                        nx = -nx; ny = -ny; nz = -nz;
-                    }
-
+                    if (nx * px[i][j] + nz * pz[i][j] < 0f) { nx = -nx; ny = -ny; nz = -nz; }
                     float nl = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
                     if (nl < 1e-6f) { nx = 0f; ny = 1f; nz = 0f; nl = 1f; }
-
                     vnx[i][j] = nx / nl;
                     vny[i][j] = ny / nl;
                     vnz[i][j] = nz / nl;
                 }
             }
 
-            // ---- 3. bake a simple directional light into vertex colours ----
             float lx = -0.35f, ly = 0.85f, lz = 0.35f;
             float ll = (float) Math.sqrt(lx * lx + ly * ly + lz * lz);
             lx /= ll; ly /= ll; lz /= ll;
 
             List<Float> out = new ArrayList<>(RINGS * SIDES * 36);
-
-            // side quads
             for (int i = 0; i < RINGS; i++) {
                 for (int j = 0; j < SIDES; j++) {
                     int j2 = (j + 1) % SIDES;
                     addShaded(out, i, j,  px, py, pz, vnx, vny, vnz, cr, cg, cb, lx, ly, lz);
                     addShaded(out, i, j2, px, py, pz, vnx, vny, vnz, cr, cg, cb, lx, ly, lz);
                     addShaded(out, i + 1, j, px, py, pz, vnx, vny, vnz, cr, cg, cb, lx, ly, lz);
-
                     addShaded(out, i, j2, px, py, pz, vnx, vny, vnz, cr, cg, cb, lx, ly, lz);
                     addShaded(out, i + 1, j2, px, py, pz, vnx, vny, vnz, cr, cg, cb, lx, ly, lz);
                     addShaded(out, i + 1, j, px, py, pz, vnx, vny, vnz, cr, cg, cb, lx, ly, lz);
                 }
             }
-
-            // bottom cap — dark, just so you cannot see inside from below
             float capShade = 0.35f;
             for (int j = 0; j < SIDES; j++) {
                 int j2 = (j + 1) % SIDES;
-                addFlat(out, 0f, 0f, 0f,
-                        cr * capShade, cg * capShade, cb * capShade);
-                addFlat(out, px[0][j2], py[0][j2], pz[0][j2],
-                        cr * capShade, cg * capShade, cb * capShade);
-                addFlat(out, px[0][j],  py[0][j],  pz[0][j],
-                        cr * capShade, cg * capShade, cb * capShade);
+                addFlat(out, 0f, 0f, 0f, cr * capShade, cg * capShade, cb * capShade);
+                addFlat(out, px[0][j2], py[0][j2], pz[0][j2], cr * capShade, cg * capShade, cb * capShade);
+                addFlat(out, px[0][j],  py[0][j],  pz[0][j],  cr * capShade, cg * capShade, cb * capShade);
             }
 
-            // ---- 4. upload to the GPU ----
             float[] data = new float[out.size()];
             for (int i = 0; i < data.length; i++) data[i] = out.get(i);
 
@@ -265,24 +245,17 @@ public final class Poop {
             GL30.glBindVertexArray(vao);
             int vbo = GL15.glGenBuffers();
             GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, vbo);
-
             FloatBuffer buf = MemoryUtil.memAllocFloat(data.length);
-            try {
-                buf.put(data).flip();
-                GL15.glBufferData(GL15.GL_ARRAY_BUFFER, buf, GL15.GL_STATIC_DRAW);
-            } finally {
-                MemoryUtil.memFree(buf);
-            }
+            try { buf.put(data).flip(); GL15.glBufferData(GL15.GL_ARRAY_BUFFER, buf, GL15.GL_STATIC_DRAW); }
+            finally { MemoryUtil.memFree(buf); }
 
             final int stride = 6 * Float.BYTES;
             GL20.glVertexAttribPointer(0, 3, GL11.GL_FLOAT, false, stride, 0L);
             GL20.glEnableVertexAttribArray(0);
             GL20.glVertexAttribPointer(1, 3, GL11.GL_FLOAT, false, stride, 3L * Float.BYTES);
             GL20.glEnableVertexAttribArray(1);
-
             GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
             GL30.glBindVertexArray(0);
-
             return new Variant(vao, vbo, data.length / 6);
         }
 
@@ -293,26 +266,21 @@ public final class Poop {
                                       float lx, float ly, float lz) {
             float x = px[i][j], y = py[i][j], z = pz[i][j];
             float nx = vnx[i][j], ny = vny[i][j], nz = vnz[i][j];
-
             float lambert = Math.max(0f, nx * lx + ny * ly + nz * lz);
             float shade = 0.40f + 0.75f * lambert;
-            float tint  = 1.0f + 0.25f * y;   // slightly lighter near the tip
-
+            float tint  = 1.0f + 0.25f * y;
             out.add(x); out.add(y); out.add(z);
             out.add(clamp(cr * shade * tint));
             out.add(clamp(cg * shade * tint));
             out.add(clamp(cb * shade * tint));
         }
 
-        private static void addFlat(List<Float> out,
-                                    float x, float y, float z,
+        private static void addFlat(List<Float> out, float x, float y, float z,
                                     float r, float g, float b) {
             out.add(x); out.add(y); out.add(z);
             out.add(r); out.add(g); out.add(b);
         }
 
-        private static float clamp(float v) {
-            return v < 0f ? 0f : (v > 1f ? 1f : v);
-        }
+        private static float clamp(float v) { return v < 0f ? 0f : (v > 1f ? 1f : v); }
     }
 }

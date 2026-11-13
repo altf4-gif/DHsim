@@ -18,6 +18,7 @@ public final class Camera {
 
     private final Matrix4f view = new Matrix4f();
     private final Matrix4f projection = new Matrix4f();
+    private float lastAspect = 0f;
 
     private final float moveSpeed = 4.0f;
     private final float mouseSensitivity = 0.12f;
@@ -27,8 +28,16 @@ public final class Camera {
     private boolean firstMouse = true;
 
     public Camera(float aspectRatio) {
-        projection.identity().perspective((float) Math.toRadians(60f), aspectRatio, 0.1f, 1000f);
+        setAspect(aspectRatio);
         updateView();
+    }
+
+    /** Rebuilds the perspective matrix. Called every frame from Engine. */
+    public void setAspect(float aspect) {
+        if (aspect <= 0.0001f) aspect = 1f;
+        if (Math.abs(aspect - lastAspect) < 0.0001f) return;
+        lastAspect = aspect;
+        projection.identity().perspective((float) Math.toRadians(60f), aspect, 0.1f, 1000f);
     }
 
     public void update(Window window, float dt) {

@@ -40,15 +40,18 @@ public final class UiRenderer {
             uniform sampler2D uTexture;
             uniform vec4 uTint;
             uniform int uUseTexture;
+            uniform vec2 uUvOffset;
+            uniform vec2 uUvScale;
             void main() {
-                vec4 tex = uUseTexture == 1 ? texture(uTexture, vTexCoord) : vec4(1.0);
+                vec2 uv = uUvOffset + vTexCoord * uUvScale;
+                vec4 tex = uUseTexture == 1 ? texture(uTexture, uv) : vec4(1.0);
                 FragColor = tex * uTint;
             }
             """;
 
     public UiRenderer() {
         shader = new ShaderProgram(VERT, FRAG);
-        
+
         // UVs mapped so that v=0 is the BOTTOM of the screen quad, v=1 is TOP.
         // This aligns with standard OpenGL texture orientation.
         float[] verts = {
@@ -60,7 +63,7 @@ public final class UiRenderer {
                 -0.5f,  0.5f, 0.0f, 0.0f, // Bottom-Left
                 -0.5f, -0.5f, 0.0f, 1.0f, // Top-Left
         };
-        
+
         vao = GL30.glGenVertexArrays();
         GL30.glBindVertexArray(vao);
         int vbo = GL15.glGenBuffers();
@@ -94,15 +97,25 @@ public final class UiRenderer {
 
     public void drawSolid(float cx, float cy, float w, float h,
                           float r, float g, float b, float a) {
-        draw(cx, cy, w, h, 0, r, g, b, a, false);
+        draw(cx, cy, w, h, 0, r, g, b, a, false, 0f, 0f, 1f, 1f);
     }
 
     public void drawTextured(float cx, float cy, float w, float h, int textureId) {
-        draw(cx, cy, w, h, textureId, 1f, 1f, 1f, 1f, true);
+        draw(cx, cy, w, h, textureId, 1f, 1f, 1f, 1f, true, 0f, 0f, 1f, 1f);
+    }
+
+    /**
+     * Draws a sub-region of a texture. Used to show the "content only" part of
+     * auto-cropped sprites in the menu without stretching.
+     */
+    public void drawTexturedUV(float cx, float cy, float w, float h, int textureId,
+                               float uMin, float vMin, float uMax, float vMax) {
+        draw(cx, cy, w, h, textureId, 1f, 1f, 1f, 1f, true, uMin, vMin, uMax, vMax);
     }
 
     private void draw(float cx, float cy, float w, float h, int textureId,
-                      float r, float g, float b, float a, boolean useTexture) {
+                      float r, float g, float b, float a, boolean useTexture,
+                      float uMin, float vMin, float uMax, float vMax) {
         Matrix4f model = new Matrix4f().translate(cx, cy, 0f).scale(w, h, 1f);
         shader.bind();
         shader.setUniform("uModel", model);
@@ -110,6 +123,8 @@ public final class UiRenderer {
         shader.setUniform4f("uTint", r, g, b, a);
         shader.setUniform1i("uUseTexture", useTexture ? 1 : 0);
         shader.setUniform1i("uTexture", 0);
+        shader.setUniform2f("uUvOffset", uMin, vMin);
+        shader.setUniform2f("uUvScale", uMax - uMin, vMax - vMin);
 
         GL13.glActiveTexture(GL13.GL_TEXTURE0);
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, textureId);
