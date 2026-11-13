@@ -13,10 +13,9 @@ import java.util.Random;
 
 public final class Engine {
 
-    private static final String VERSION = "v37.1 (Rigged MrH Scaling)";
+    private static final String VERSION = "v38 (Female Rigged Model)";
     private static final int TEEN_INDEX = 12;
 
-    // ... (Shaders remain identical) ...
     private static final String SPRITE_VERT = """
             #version 330 core
             layout (location = 0) in vec2 aPos;
@@ -308,19 +307,18 @@ public final class Engine {
         ObjModel tankModel = tryLoad("mesh/Tank", "Tqa");
         ObjModel policeModel = tryLoad("mesh/Police", "hl");
 
-        // --- MrH Model (Rigged) ---
-        RiggedModel mrH = null;
+        // --- Rigged Models List ---
+        List<RiggedModel> riggedModels = new ArrayList<>();
+        
+        // Initial MrH
         String mrhObjPath = "mesh/MrH/meshy-model-2026-11-13T06-34-41-877Z(1).obj";
         String mrhTexPath = "mesh/MrH/texture_21.png";
-        
-        File mrhObjFile = new File(mrhObjPath);
-        if (mrhObjFile.exists()) {
+        if (new File(mrhObjPath).exists()) {
             try {
-                // Pass target height of 2.0 meters
-                mrH = new RiggedModel(mrhObjPath, mrhTexPath, 10f, 10f, 2.0f);
-                System.out.println("  -> MrH loaded and rigged!");
+                riggedModels.add(new RiggedModel(mrhObjPath, mrhTexPath, 10f, 10f, 2.0f));
+                System.out.println("  -> MrH loaded.");
             } catch (Exception e) {
-                System.err.println("  [ERROR] Failed to load MrH model: " + e.getMessage());
+                System.err.println("  [ERROR] Failed to load MrH: " + e.getMessage());
             }
         }
 
@@ -472,7 +470,7 @@ public final class Engine {
                     boolean left = window.isMouseButtonPressed(GLFW.GLFW_MOUSE_BUTTON_LEFT);
                     if (left && !leftWasPressed && idx >= 0) {
                         SpawnMenu.Action a = spawnMenu.actionAt(idx);
-                        if (a != null) spawnFromMenu(a, camera, poops, eaters, npcRng, world.tribes);
+                        if (a != null) spawnFromMenu(a, camera, poops, eaters, npcRng, world.tribes, riggedModels);
                     }
                     leftWasPressed = left;
                 } else {
@@ -532,7 +530,8 @@ public final class Engine {
                 if (!newborns.isEmpty()) eaters.addAll(newborns);
                 poops.removeIf(p -> p.eaten);
 
-                if (mrH != null) mrH.update(dt);
+                // Update rigged models
+                for (RiggedModel m : riggedModels) m.update(dt);
 
                 poopRegenTimer += dt;
                 if (poopRegenTimer >= 15f) {
@@ -625,7 +624,8 @@ public final class Engine {
                 for (HouseInstance t : staticTrees) t.render(houseShader, camera.view(), camera.projection());
                 for (HouseInstance p : staticProps) p.render(houseShader, camera.view(), camera.projection());
                 
-                if (mrH != null) mrH.render(houseShader, camera.view(), camera.projection());
+                // Draw rigged models
+                for (RiggedModel m : riggedModels) m.render(houseShader, camera.view(), camera.projection());
                 
                 houseShader.unbind();
 
@@ -659,7 +659,7 @@ public final class Engine {
                 GL11.glDisable(GL11.GL_BLEND);
 
                 ui.begin(window.width(), window.height());
-                hud.render(ui, window.width(), window.height(), eaters.size(),
+                hud.render(ui, window.width(), window.height(), eaters.size() + riggedModels.size(), // <-- Добавили ригед модели в счетчик
                         dayNight.timeOfDay(), weather.state().name(), Audio.isMuted());
                 if (encyclopedia.isOpen()) encyclopedia.render(ui, window.width(), window.height());
                 if (spawnMenu.isOpen())    spawnMenu.render(ui, window.width(), window.height());
@@ -676,7 +676,9 @@ public final class Engine {
             if (vWalls != null) vWalls.destroy(); if (vRoof != null) vRoof.destroy(); if (vDoor != null) vDoor.destroy(); if (vWindows != null) vWindows.destroy();
             if (tankModel != null) tankModel.destroy();
             if (policeModel != null) policeModel.destroy();
-            if (mrH != null) mrH.destroy();
+            
+            for (RiggedModel m : riggedModels) m.destroy();
+            
             shadowMap.destroy();
             TribeMarker.destroy();
             lineRenderer.destroy();
@@ -697,11 +699,11 @@ public final class Engine {
         return new float[]{ x, y, z };
     }
 
-    private static void spawnFromMenu(SpawnMenu.Action action, Camera camera, List<Poop> poops, List<Eater> eaters, Random rng, List<Tribe> tribes) {
+    private static void spawnFromMenu(SpawnMenu.Action action, Camera camera, List<Poop> poops, List<Eater> eaters, Random rng, List<Tribe> tribes, List<RiggedModel> riggedModels) {
         boolean isCreature = action != SpawnMenu.Action.SPAWN_POOP
                 && action != SpawnMenu.Action.SPAWN_BRIGHT_POOP
                 && action != SpawnMenu.Action.SPAWN_POOP_CLUSTER;
-        if (isCreature && eaters.size() >= Eater.MAX_POPULATION) return;
+        if (isCreature && (eaters.size() + riggedModels.size()) >= Eater.MAX_POPULATION) return;
 
         float[] sp = spawnPoint(camera);
         float sx = sp[0], sy = sp[1], sz = sp[2];
@@ -741,12 +743,26 @@ public final class Engine {
             }
             case SPAWN_TEEN_CROWD -> {
                 for (int i = 0; i < 5; i++) {
-                    if (eaters.size() >= Eater.MAX_POPULATION) break;
+                    if ((eaters.size() + riggedModels.size()) >= Eater.MAX_POPULATION) break;
                     float a = rng.nextFloat() * (float) (Math.PI * 2);
                     float r = 0.5f + rng.nextFloat() * 3f;
                     eaters.add(new Eater(Eater.Type.TEEN,
                             sx + (float) Math.cos(a) * r,
                             sz + (float) Math.sin(a) * r, randomTribe, rng));
+                }
+            }
+            case SPAWN_MRH_FEMALE -> {
+                String obj = "mesh/MrH/ww/womento.obj";
+                String tex = "mesh/MrH/ww/texture_21.png";
+                if (new File(obj).exists()) {
+                    try {
+                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 1.7f));
+                        System.out.println("[SPAWN] MrH Female spawned.");
+                    } catch (Exception e) {
+                        System.err.println("[ERROR] Failed to load Female: " + e.getMessage());
+                    }
+                } else {
+                    System.err.println("[ERROR] Female model not found at " + obj);
                 }
             }
         }
