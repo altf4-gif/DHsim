@@ -12,7 +12,6 @@ import java.util.List;
 import java.util.Random;
 
 public final class Engine {
-
     private static final String VERSION = "v40.6 (Straight Arms)";
     private static final int TEEN_INDEX = 12;
 
@@ -20,12 +19,15 @@ public final class Engine {
             #version 330 core
             layout (location = 0) in vec2 aPos;
             layout (location = 1) in vec2 aTexCoord;
+
             uniform mat4 uModel;
             uniform mat4 uView;
             uniform mat4 uProjection;
             uniform vec2 uUvOffset;
             uniform vec2 uUvScale;
+
             out vec2 vTexCoord;
+
             void main() {
                 gl_Position = uProjection * uView * uModel * vec4(aPos, 0.0, 1.0);
                 vTexCoord = uUvOffset + aTexCoord * uUvScale;
@@ -96,15 +98,14 @@ public final class Engine {
             uniform vec3 uCamPos;
             uniform vec3 uFogColor;
             uniform float uFogDensity;
+            uniform float uWhiteKey;   // 1 = вырезать белое (дома/листва), 0 = нет (персонажи)
 
             float shadowCalc(vec4 lsp, vec3 n) {
                 vec3 p = lsp.xyz / lsp.w;
                 p = p * 0.5 + 0.5;
                 if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
-                
-                float bias = max(0.05 * (1.0 - dot(n, uSunDir)), 0.005);
+                float bias = max(0.006 * (1.0 - dot(n, uSunDir)), 0.0015);
                 float current = p.z - bias;
-                
                 vec2 ts = 1.0 / textureSize(uShadowMap, 0);
                 float sh = 0.0;
                 for (int x = -1; x <= 1; x++) {
@@ -118,12 +119,11 @@ public final class Engine {
 
             void main() {
                 vec4 tex = texture(uTexture, vTexCoord);
-                if (tex.a < 0.5) discard;
-                if (tex.r > 0.93 && tex.g > 0.93 && tex.b > 0.93) discard;
+                if (tex.a < 0.1) discard;
+                if (uWhiteKey > 0.5 && tex.r > 0.92 && tex.g > 0.92 && tex.b > 0.92) discard;
 
                 vec3 n = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
                 if (!gl_FrontFacing) n = -n;
-
                 float diff = max(dot(n, uSunDir), 0.0);
 
                 float shadow = 1.0;
@@ -155,19 +155,21 @@ public final class Engine {
             in vec2 vTexCoord;
             out vec4 FragColor;
             uniform sampler2D uTexture;
+            uniform float uWhiteKey;
             void main() {
                 vec4 c = texture(uTexture, vTexCoord);
                 if (c.a < 0.5) discard;
-                if (c.r > 0.93 && c.g > 0.93 && c.b > 0.93) discard;
+                if (uWhiteKey > 0.5 && c.r > 0.92 && c.g > 0.92 && c.b > 0.92) discard;
             }
             """;
 
     private static final String[] PEOPLE_IMAGES = {
-            "black_male_tpose.png", "child_boy_tpose.png", "elderly_male_tpose.png", "female_slim_tpose.png",
-            "hazmat_suit_yellow_tpose.png", "leather_coat_military_tpose.png", "male_bent_over_pose.png", "male_police_costume_tpose.png",
-            "military_uniform_torn_tpose.png", "muscular_male_tpose.png", "overweight_male_tpose.png", "pregnant_female_tpose.png",
-            "teenager_male_tpose.png", "teenager_sign_mars.png", "teenager_sign_muyakat.png", "teenager_sign_simulation.png",
-            "young_boy_tpose.png"
+            "black_male_tpose.png", "child_boy_tpose.png", "elderly_male_tpose.png",
+            "female_slim_tpose.png", "hazmat_suit_yellow_tpose.png", "leather_coat_military_tpose.png",
+            "male_bent_over_pose.png", "male_police_costume_tpose.png", "military_uniform_torn_tpose.png",
+            "muscular_male_tpose.png", "overweight_male_tpose.png", "pregnant_female_tpose.png",
+            "teenager_male_tpose.png", "teenager_sign_mars.png", "teenager_sign_muyakat.png",
+            "teenager_sign_simulation.png", "young_boy_tpose.png"
     };
 
     private static final String[] PEOPLE_DESCRIPTIONS = new String[PEOPLE_IMAGES.length];
@@ -178,10 +180,9 @@ public final class Engine {
     }
 
     private static final String[] PEOPLE_NAMES = {
-            "Человек в чёрном", "Ребёнок", "Пожилой мужчина", "Стройная женщина",
-            "Хазмат", "Военная шинель", "Согнувшийся", "Полицейский",
-            "Рваная форма", "Качок", "Толстяк", "Беременная",
-            "Подросток", "Плакат 'Марс'", "Плакат 'Муякать'", "Плакат 'Симуляция'",
+            "Человек в чёрном", "Ребёнок", "Пожилой мужчина", "Стройная женщина", "Хазмат",
+            "Военная шинель", "Согнувшийся", "Полицейский", "Рваная форма", "Качок", "Толстяк",
+            "Беременная", "Подросток", "Плакат 'Марс'", "Плакат 'Муякать'", "Плакат 'Симуляция'",
             "Мальчик"
     };
 
@@ -191,8 +192,11 @@ public final class Engine {
             String obj = folder + "/" + base + s + ".obj";
             String mtl = folder + "/" + base + s + ".mtl";
             if (new File(obj).exists()) {
-                try { return new ObjModel(obj, mtl, null); }
-                catch (Exception e) { System.err.println("[ERROR] " + obj + ": " + e.getMessage()); }
+                try {
+                    return new ObjModel(obj, mtl, null);
+                } catch (Exception e) {
+                    System.err.println("[ERROR] " + obj + ": " + e.getMessage());
+                }
             }
         }
         return null;
@@ -214,18 +218,15 @@ public final class Engine {
 
     public void run() {
         System.out.println("=== Engine " + VERSION + " ===");
-
         Window window = new Window(1280, 720, "LWJGL 3D Engine " + VERSION);
         Renderer renderer = new Renderer();
         renderer.init();
         window.setCursorDisabled(true);
-
         Camera camera = new Camera(window.aspectRatio());
-        ShaderProgram spriteShader       = new ShaderProgram(SPRITE_VERT, SPRITE_FRAG);
+        ShaderProgram spriteShader = new ShaderProgram(SPRITE_VERT, SPRITE_FRAG);
         ShaderProgram spriteShadowShader = new ShaderProgram(SPRITE_SHADOW_VERT, SPRITE_SHADOW_FRAG);
-        ShaderProgram houseShader        = new ShaderProgram(HOUSE_VERT, HOUSE_FRAG);
-        ShaderProgram shadowShader       = new ShaderProgram(SHADOW_VERT, SHADOW_FRAG);
-
+        ShaderProgram houseShader = new ShaderProgram(HOUSE_VERT, HOUSE_FRAG);
+        ShaderProgram shadowShader = new ShaderProgram(SHADOW_VERT, SHADOW_FRAG);
         Sky sky = new Sky();
         Ground ground = new Ground();
         Water water = new Water();
@@ -238,27 +239,25 @@ public final class Engine {
         WorldManager world = new WorldManager();
         TribeMarker.init();
         Hud hud = new Hud();
-
         boolean[] terrainDirty = {false};
         float[] terrainTimer = {0f};
         world.onTerrainDirty = () -> terrainDirty[0] = true;
-
         Texture[] peopleTex = new Texture[PEOPLE_IMAGES.length];
         for (int i = 0; i < PEOPLE_IMAGES.length; i++) {
-            try { peopleTex[i] = new Texture("img/P/" + PEOPLE_IMAGES[i]); }
-            catch (Exception e) { peopleTex[i] = null; }
+            try {
+                peopleTex[i] = new Texture("img/P/" + PEOPLE_IMAGES[i]);
+            } catch (Exception e) {
+                peopleTex[i] = null;
+            }
         }
-
         Texture[] typeTex = {
                 peopleTex[12], peopleTex[10], peopleTex[3], peopleTex[11],
                 peopleTex[1], peopleTex[16], peopleTex[9],
         };
         Eater.initTextures(typeTex);
-
         List<Sprite> sprites = new ArrayList<>();
         List<Person> peopleList = new ArrayList<>();
         final float startX = -4.0f, spacingX = 1.2f, spriteHeight = 1.5f;
-
         for (int i = 0; i < PEOPLE_IMAGES.length; i++) {
             if (peopleTex[i] == null) continue;
             peopleList.add(new Person(PEOPLE_NAMES[i], PEOPLE_DESCRIPTIONS[i], peopleTex[i]));
@@ -269,33 +268,26 @@ public final class Engine {
             float y = Ground.getHeightAt(x, z);
             sprites.add(new Sprite(peopleTex[i], new Vector3f(x, y + spriteHeight * 0.5f, z), spriteHeight));
         }
-
         Encyclopedia encyclopedia = new Encyclopedia(peopleList);
-
         Vector3f redPos = findGoodTribesSpawn(-20f, -20f, 1.5f);
         Vector3f bluePos = findGoodTribesSpawn(40f, -40f, 1.5f);
         Vector3f greenPos = findGoodTribesSpawn(0f, 50f, 1.5f);
-
         Tribe redTribe = new Tribe(0, redPos, new Vector3f(1f, 0.2f, 0.2f));
         Tribe blueTribe = new Tribe(1, bluePos, new Vector3f(0.2f, 0.5f, 1f));
         Tribe greenTribe = new Tribe(2, greenPos, new Vector3f(0.2f, 1f, 0.2f));
         world.tribes.add(redTribe);
         world.tribes.add(blueTribe);
         world.tribes.add(greenTribe);
-
         Ground.addPad(redTribe.center.x, redTribe.center.z, 14f, 6f);
         Ground.addPad(blueTribe.center.x, blueTribe.center.z, 14f, 6f);
         Ground.addPad(greenTribe.center.x, greenTribe.center.z, 14f, 6f);
         ground.rebuild();
-
         ObjModel treeModel = tryLoad("mesh/TreeRL", "Tree");
         if (treeModel != null) treeModel.applyFallbackTexture(Texture.generateLeaves());
-
         ObjModel vWalls = tryLoad("mesh/VillageHouse", "walls");
-        ObjModel vRoof  = tryLoad("mesh/VillageHouse", "roof");
-        ObjModel vDoor  = tryLoad("mesh/VillageHouse", "door");
+        ObjModel vRoof = tryLoad("mesh/VillageHouse", "roof");
+        ObjModel vDoor = tryLoad("mesh/VillageHouse", "door");
         ObjModel vWindows = tryLoad("mesh/VillageHouse", "windows");
-
         if (vWalls != null && vRoof != null && vDoor != null && vWindows != null) {
             world.protoWalls = vWalls;
             world.protoRoof = vRoof;
@@ -303,26 +295,21 @@ public final class Engine {
             world.protoWindows = vWindows;
             world.protoScale = 6.0f / Math.max(vWalls.getHeight(), vRoof.getHeight());
         }
-
         ObjModel tankModel = tryLoad("mesh/Tank", "Tqa");
         ObjModel policeModel = tryLoad("mesh/Police", "hl");
-
         List<RiggedModel> riggedModels = new ArrayList<>();
-        
         String mrhObjPath = "mesh/MrH/meshy-model-2026-11-13T06-34-41-877Z(1).obj";
         String mrhTexPath = "mesh/MrH/texture_21.png";
         if (new File(mrhObjPath).exists()) {
             try {
-                riggedModels.add(new RiggedModel(mrhObjPath, mrhTexPath, 10f, 10f, 2.0f, 0.15f, 1.5f));
+                riggedModels.add(new RiggedModel(mrhObjPath, mrhTexPath, 10f, 10f, 2.0f, 0.11f, 1.57f));
                 System.out.println("  -> MrH loaded.");
             } catch (Exception e) {
                 System.err.println("  [ERROR] Failed to load MrH: " + e.getMessage());
             }
         }
-
         List<HouseInstance> staticProps = new ArrayList<>();
         Random propRng = new Random(999);
-
         if (tankModel != null) {
             float scale = 3.5f / tankModel.getHeight();
             for (int i = 0; i < 2; i++) {
@@ -332,11 +319,10 @@ public final class Engine {
                 if (Ground.getHeightAt(x, z) < Ground.WATER_LEVEL + 0.5f) { i--; continue; }
                 if (Ground.getHeightAt(x, z) > 15f) { i--; continue; }
                 float y = Ground.getHeightAt(x, z);
-                float yaw = propRng.nextFloat() * (float)Math.PI * 2f;
+                float yaw = propRng.nextFloat() * (float) Math.PI * 2f;
                 staticProps.add(new HouseInstance(tankModel, null, null, null, x, y, z, yaw, scale));
             }
         }
-
         if (policeModel != null) {
             float scale = 1.8f / policeModel.getHeight();
             for (int i = 0; i < 5; i++) {
@@ -346,15 +332,13 @@ public final class Engine {
                 if (Ground.getHeightAt(x, z) < Ground.WATER_LEVEL + 0.5f) { i--; continue; }
                 if (Ground.getHeightAt(x, z) > 15f) { i--; continue; }
                 float y = Ground.getHeightAt(x, z);
-                float yaw = propRng.nextFloat() * (float)Math.PI * 2f;
+                float yaw = propRng.nextFloat() * (float) Math.PI * 2f;
                 staticProps.add(new HouseInstance(policeModel, null, null, null, x, y, z, yaw, scale));
             }
         }
-
         List<HouseInstance> staticTrees = new ArrayList<>();
         List<Vector3f> occupied = new ArrayList<>();
         Random rng = new Random(42);
-
         List<WorldManager.TreeData> treeDataList = new ArrayList<>();
         if (treeModel != null) {
             float scale = 6.5f / treeModel.getHeight();
@@ -364,14 +348,12 @@ public final class Engine {
                 if (Math.abs(x) < 15f && Math.abs(z) < 15f) continue;
                 if (Ground.getHeightAt(x, z) < Ground.WATER_LEVEL + 0.5f) continue;
                 if (Ground.getHeightAt(x, z) > 15f) continue;
-
                 boolean close = false;
                 for (Vector3f p : occupied) if (p.distanceSquared(x, 0, z) < 100f) { close = true; break; }
                 if (close) continue;
                 occupied.add(new Vector3f(x, 0, z));
-                float yaw = rng.nextFloat() * (float)Math.PI * 2f;
+                float yaw = rng.nextFloat() * (float) Math.PI * 2f;
                 float y = Ground.getHeightAt(x, z) - 0.6f;
-
                 HouseInstance inst = new HouseInstance(treeModel, null, null, null, x, y, z, yaw, scale);
                 staticTrees.add(inst);
                 treeDataList.add(new WorldManager.TreeData(inst, x, z, yaw, scale, y));
@@ -379,7 +361,6 @@ public final class Engine {
             }
             world.registerTrees(treeDataList);
         }
-
         Poop.init();
         List<Poop> poops = new ArrayList<>();
         Random worldRng = new Random(2024);
@@ -393,12 +374,10 @@ public final class Engine {
             for (Vector3f hc : occupied) if (hc.distanceSquared(x, 0f, z) < 36f) { blocked = true; break; }
             if (!blocked) poops.add(Poop.random(x, z, worldRng));
         }
-
         UiTexture poopIcon = PoopPreview.render(256, false);
         GL11.glViewport(0, 0, window.width(), window.height());
         UiTexture brightPoopIcon = PoopPreview.render(256, true);
         GL11.glViewport(0, 0, window.width(), window.height());
-
         List<Eater> eaters = new ArrayList<>();
         Random npcRng = new Random(777);
         if (typeTex[Eater.Type.TEEN.ordinal()] != null) {
@@ -406,61 +385,63 @@ public final class Engine {
             eaters.add(new Eater(Eater.Type.TEEN, blueTribe.center.x + 2f, blueTribe.center.z + 2f, blueTribe, npcRng));
             eaters.add(new Eater(Eater.Type.TEEN, greenTribe.center.x + 2f, greenTribe.center.z + 2f, greenTribe, npcRng));
         }
-
         camera.snapToGround();
-
         SpawnMenu spawnMenu = new SpawnMenu(typeTex, poopIcon, brightPoopIcon);
-
         float lastTime = (float) GLFW.glfwGetTime();
         boolean tabWasPressed = false, qWasPressed = false, escWasPressed = false;
         boolean upWasPressed = false, downWasPressed = false, leftWasPressed = false;
         boolean tWasPressed = false, mWasPressed = false;
-
         float poopRegenTimer = 0f, treeRegenTimer = 0f;
-
         Matrix4f lightView = new Matrix4f();
         Matrix4f lightProj = new Matrix4f().ortho(-140f, 140f, -140f, 140f, 1f, 500f);
         Matrix4f lightVP = new Matrix4f();
-
         try {
             while (!window.shouldClose()) {
                 float now = (float) GLFW.glfwGetTime();
                 float dt = Math.min(now - lastTime, 0.1f);
                 lastTime = now;
-
                 window.pollEvents();
-
                 if (window.isKeyPressed(GLFW.GLFW_KEY_ESCAPE) && !escWasPressed) {
                     if (spawnMenu.isOpen()) {
-                        spawnMenu.close(); window.setCursorDisabled(true); camera.resetMouseLook(); leftWasPressed = true;
+                        spawnMenu.close();
+                        window.setCursorDisabled(true);
+                        camera.resetMouseLook();
+                        leftWasPressed = true;
                     } else if (encyclopedia.isOpen()) {
-                        encyclopedia.toggle(); window.setCursorDisabled(true); camera.resetMouseLook();
-                    } else { return; }
+                        encyclopedia.toggle();
+                        window.setCursorDisabled(true);
+                        camera.resetMouseLook();
+                    } else {
+                        return;
+                    }
                 }
                 escWasPressed = window.isKeyPressed(GLFW.GLFW_KEY_ESCAPE);
-
                 if (window.isKeyPressed(GLFW.GLFW_KEY_Q) && !qWasPressed) {
                     if (spawnMenu.isOpen()) {
-                        spawnMenu.close(); window.setCursorDisabled(true); camera.resetMouseLook();
+                        spawnMenu.close();
+                        window.setCursorDisabled(true);
+                        camera.resetMouseLook();
                     } else {
                         if (encyclopedia.isOpen()) encyclopedia.toggle();
-                        spawnMenu.open(); window.setCursorDisabled(false); camera.resetMouseLook(); leftWasPressed = true;
+                        spawnMenu.open();
+                        window.setCursorDisabled(false);
+                        camera.resetMouseLook();
+                        leftWasPressed = true;
                     }
                 }
                 qWasPressed = window.isKeyPressed(GLFW.GLFW_KEY_Q);
-
                 if (window.isKeyPressed(GLFW.GLFW_KEY_TAB) && !tabWasPressed) {
                     if (spawnMenu.isOpen()) spawnMenu.close();
-                    encyclopedia.toggle(); window.setCursorDisabled(!encyclopedia.isOpen()); camera.resetMouseLook(); leftWasPressed = true;
+                    encyclopedia.toggle();
+                    window.setCursorDisabled(!encyclopedia.isOpen());
+                    camera.resetMouseLook();
+                    leftWasPressed = true;
                 }
                 tabWasPressed = window.isKeyPressed(GLFW.GLFW_KEY_TAB);
-
                 if (window.isKeyPressed(GLFW.GLFW_KEY_T) && !tWasPressed) dayNight.toggleSpeed();
                 tWasPressed = window.isKeyPressed(GLFW.GLFW_KEY_T);
-
                 if (window.isKeyPressed(GLFW.GLFW_KEY_M) && !mWasPressed) Audio.toggleMuted();
                 mWasPressed = window.isKeyPressed(GLFW.GLFW_KEY_M);
-
                 if (spawnMenu.isOpen()) {
                     double[] cp = window.cursorPos();
                     int idx = spawnMenu.hitTest(window.width(), window.height(), cp[0], cp[1]);
@@ -474,35 +455,34 @@ public final class Engine {
                 } else {
                     leftWasPressed = false;
                 }
-
                 if (encyclopedia.isOpen()) {
                     if (window.isKeyPressed(GLFW.GLFW_KEY_UP) && !upWasPressed) encyclopedia.prev();
                     upWasPressed = window.isKeyPressed(GLFW.GLFW_KEY_UP);
                     if (window.isKeyPressed(GLFW.GLFW_KEY_DOWN) && !downWasPressed) encyclopedia.next();
                     downWasPressed = window.isKeyPressed(GLFW.GLFW_KEY_DOWN);
-                } else { upWasPressed = false; downWasPressed = false; }
-
+                } else {
+                    upWasPressed = false;
+                    downWasPressed = false;
+                }
                 camera.setAspect(window.aspectRatio());
                 if (!spawnMenu.isOpen() && !encyclopedia.isOpen()) camera.update(window, dt);
-
                 dayNight.update(dt);
                 weather.update(dt);
-
                 Vector3f sunDir = dayNight.sunDir();
                 Vector3f sunColor = dayNight.sunColor();
                 Vector3f ambient = dayNight.ambient();
                 Vector3f fogColor = dayNight.fogColor();
                 float fogDensity = dayNight.fogDensity();
-
                 float sunIntensity = dayNight.sunIntensity() * weather.sunIntensityModifier();
                 sunColor.mul(weather.sunIntensityModifier());
                 ambient.mul(weather.ambientDampening());
-
                 Vector3f eye = new Vector3f(sunDir).mul(200f);
-                if (Math.abs(sunDir.y) > 0.99f) { eye.x += 0.001f; eye.z += 0.001f; }
+                if (Math.abs(sunDir.y) > 0.99f) {
+                    eye.x += 0.001f;
+                    eye.z += 0.001f;
+                }
                 lightView.identity().lookAt(eye.x, eye.y, eye.z, 0, 0, 0, 0, 1, 0);
                 lightVP.set(lightProj).mul(lightView);
-
                 if (terrainDirty[0]) {
                     terrainTimer[0] += dt;
                     if (terrainTimer[0] >= 0.5f) {
@@ -520,16 +500,12 @@ public final class Engine {
                 } else {
                     terrainTimer[0] = 0f;
                 }
-
                 eaters.removeIf(Eater::isDead);
-
                 List<Eater> newborns = new ArrayList<>();
                 for (Eater e : eaters) e.update(dt, poops, eaters, newborns, world, camera.position());
                 if (!newborns.isEmpty()) eaters.addAll(newborns);
                 poops.removeIf(p -> p.eaten);
-
                 for (RiggedModel m : riggedModels) m.update(dt);
-
                 poopRegenTimer += dt;
                 if (poopRegenTimer >= 15f) {
                     poopRegenTimer = 0f;
@@ -558,50 +534,43 @@ public final class Engine {
                         }
                     }
                 }
-
                 shadowMap.bind();
                 GL11.glEnable(GL11.GL_DEPTH_TEST);
                 GL11.glDepthMask(true);
                 GL13.glActiveTexture(GL13.GL_TEXTURE0);
-
                 if (sunIntensity > 0.05f) {
                     shadowShader.bind();
                     shadowShader.setUniform("uLightVP", lightVP);
                     shadowShader.setUniform1i("uTexture", 0);
+                    shadowShader.setUniform1f("uWhiteKey", 1f);
                     for (HouseInstance t : staticTrees) t.render(shadowShader, camera.view(), camera.projection());
                     for (HouseInstance p : staticProps) p.render(shadowShader, camera.view(), camera.projection());
                     for (Tribe tribe : world.tribes) {
                         for (HouseInstance h : tribe.houses) h.render(shadowShader, camera.view(), camera.projection());
                     }
+                    renderRiggedShadows(riggedModels, shadowShader, lightVP);
                     shadowShader.unbind();
-
                     GL11.glDisable(GL11.GL_DEPTH_TEST);
                     GL11.glEnable(GL11.GL_BLEND);
                     GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
                     spriteShadowShader.bind();
                     spriteShadowShader.setUniform("uLightVP", lightVP);
                     for (Sprite s : sprites) s.renderShadow(spriteShadowShader, lightVP, sunDir, now);
-                    for (Eater e : eaters)  e.renderShadow(spriteShadowShader, lightVP, sunDir, now);
+                    for (Eater e : eaters) e.renderShadow(spriteShadowShader, lightVP, sunDir, now);
                     spriteShadowShader.unbind();
                     GL11.glDisable(GL11.GL_BLEND);
                     GL11.glEnable(GL11.GL_DEPTH_TEST);
                 }
                 shadowMap.unbind(window.width(), window.height());
-
                 renderer.clear();
                 sky.render(camera, dayNight, weather, now);
-
                 Vector3f camPos = camera.position();
-                ground.render(camera.view(), camera.projection(),
-                        lightVP, shadowMap.textureId(),
+                ground.render(camera.view(), camera.projection(), lightVP, shadowMap.textureId(),
                         sunDir, sunColor, ambient, camPos, fogColor, fogDensity);
-
                 water.render(camera.view(), camera.projection(), dayNight, sunColor, camPos, now, fogColor, fogDensity);
-
                 GL13.glActiveTexture(GL13.GL_TEXTURE1);
                 GL11.glBindTexture(GL11.GL_TEXTURE_2D, shadowMap.textureId());
                 GL13.glActiveTexture(GL13.GL_TEXTURE0);
-
                 houseShader.bind();
                 houseShader.setUniform("uLightVP", lightVP);
                 houseShader.setUniform1i("uShadowMap", 1);
@@ -612,17 +581,14 @@ public final class Engine {
                 houseShader.setUniform3f("uCamPos", camPos.x, camPos.y, camPos.z);
                 houseShader.setUniform3f("uFogColor", fogColor.x, fogColor.y, fogColor.z);
                 houseShader.setUniform1f("uFogDensity", fogDensity);
-
+                houseShader.setUniform1f("uWhiteKey", 1f);
                 for (Tribe tribe : world.tribes) {
                     for (HouseInstance h : tribe.houses) h.render(houseShader, camera.view(), camera.projection());
                 }
                 for (HouseInstance t : staticTrees) t.render(houseShader, camera.view(), camera.projection());
                 for (HouseInstance p : staticProps) p.render(houseShader, camera.view(), camera.projection());
-                
-                for (RiggedModel m : riggedModels) m.render(houseShader, camera.view(), camera.projection());
-                
+                renderRigged(riggedModels, houseShader, camera.view(), camera.projection());
                 houseShader.unbind();
-
                 Poop.begin(camera.view(), camera.projection(), camPos, fogColor, fogDensity);
                 Vector3f tint = new Vector3f(
                         ambient.x + sunColor.x * 0.4f,
@@ -632,55 +598,76 @@ public final class Engine {
                 Poop.setLightTint(tint.x, tint.y, tint.z);
                 for (Poop p : poops) p.render();
                 Poop.end();
-
                 GL11.glEnable(GL11.GL_BLEND);
                 GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
                 GL11.glDepthMask(false);
-
                 spriteShader.bind();
                 spriteShader.setUniform3f("uLightTint", tint.x, tint.y, tint.z);
                 for (Sprite s : sprites) s.render(spriteShader, camera.view(), camera.projection(), camera.position(), now);
                 for (Eater e : eaters) e.render(spriteShader, camera.view(), camera.projection(), camera.position(), now);
                 spriteShader.unbind();
-
                 for (Eater e : eaters) {
                     if (e.getTribe() != null && !e.isDead()) {
-                        TribeMarker.render(camera.view(), camera.projection(),
-                                e.position().x, e.position().y, e.position().z, 1.2f, e.getTribe().color);
+                        TribeMarker.render(camera.view(), camera.projection(), e.position().x, e.position().y, e.position().z, 1.2f, e.getTribe().color);
                     }
                 }
                 GL11.glDepthMask(true);
                 GL11.glDisable(GL11.GL_BLEND);
-
                 ui.begin(window.width(), window.height());
-                hud.render(ui, window.width(), window.height(), eaters.size() + riggedModels.size(),
-                        dayNight.timeOfDay(), weather.state().name(), Audio.isMuted());
+                hud.render(ui, window.width(), window.height(), eaters.size() + riggedModels.size(), dayNight.timeOfDay(), weather.state().name(), Audio.isMuted());
                 if (encyclopedia.isOpen()) encyclopedia.render(ui, window.width(), window.height());
-                if (spawnMenu.isOpen())    spawnMenu.render(ui, window.width(), window.height());
+                if (spawnMenu.isOpen()) spawnMenu.render(ui, window.width(), window.height());
                 ui.end();
-
                 window.swapBuffers();
             }
         } finally {
             for (Texture t : peopleTex) if (t != null) t.destroy();
-            encyclopedia.destroy(); spawnMenu.destroy(); hud.destroy();
+            encyclopedia.destroy();
+            spawnMenu.destroy();
+            hud.destroy();
             if (poopIcon != null) poopIcon.destroy();
             if (brightPoopIcon != null) brightPoopIcon.destroy();
             if (treeModel != null) treeModel.destroy();
-            if (vWalls != null) vWalls.destroy(); if (vRoof != null) vRoof.destroy(); if (vDoor != null) vDoor.destroy(); if (vWindows != null) vWindows.destroy();
+            if (vWalls != null) vWalls.destroy();
+            if (vRoof != null) vRoof.destroy();
+            if (vDoor != null) vDoor.destroy();
+            if (vWindows != null) vWindows.destroy();
             if (tankModel != null) tankModel.destroy();
             if (policeModel != null) policeModel.destroy();
-            
             for (RiggedModel m : riggedModels) m.destroy();
-            
+            riggedModels.clear();
             shadowMap.destroy();
             TribeMarker.destroy();
             lineRenderer.destroy();
             water.destroy();
-            Poop.destroyAll(); ui.destroy(); spriteShader.destroy(); spriteShadowShader.destroy();
-            houseShader.destroy(); shadowShader.destroy();
-            sky.destroy(); ground.destroy(); window.destroy();
+            Poop.destroyAll();
+            ui.destroy();
+            spriteShader.destroy();
+            spriteShadowShader.destroy();
+            houseShader.destroy();
+            shadowShader.destroy();
+            sky.destroy();
+            ground.destroy();
+            window.destroy();
         }
+    }
+
+    /** Персонажи в теневом проходе. Вызывать при уже забинденном shadowShader. */
+    private static void renderRiggedShadows(List<RiggedModel> models,
+                                            ShaderProgram shadowShader, Matrix4f lightVP) {
+        if (models == null || models.isEmpty()) return;
+        shadowShader.setUniform1f("uWhiteKey", 0f);
+        for (RiggedModel m : models) m.renderShadow(shadowShader, lightVP);
+        shadowShader.setUniform1f("uWhiteKey", 1f);
+    }
+
+    /** Персонажи в основном проходе. Вызывать при уже забинденном houseShader. */
+    private static void renderRigged(List<RiggedModel> models, ShaderProgram houseShader,
+                                     Matrix4f view, Matrix4f proj) {
+        if (models == null || models.isEmpty()) return;
+        houseShader.setUniform1f("uWhiteKey", 0f);
+        for (RiggedModel m : models) m.render(houseShader, view, proj);
+        houseShader.setUniform1f("uWhiteKey", 1f);
     }
 
     private static float[] spawnPoint(Camera camera) {
@@ -693,26 +680,26 @@ public final class Engine {
         return new float[]{ x, y, z };
     }
 
-    private static void spawnFromMenu(SpawnMenu.Action action, Camera camera, List<Poop> poops, List<Eater> eaters, Random rng, List<Tribe> tribes, List<RiggedModel> riggedModels) {
+    private static void spawnFromMenu(SpawnMenu.Action action, Camera camera,
+                                      List<Poop> poops, List<Eater> eaters, Random rng,
+                                      List<Tribe> tribes, List<RiggedModel> riggedModels) {
         boolean isCreature = action != SpawnMenu.Action.SPAWN_POOP
                 && action != SpawnMenu.Action.SPAWN_BRIGHT_POOP
                 && action != SpawnMenu.Action.SPAWN_POOP_CLUSTER;
         if (isCreature && (eaters.size() + riggedModels.size()) >= Eater.MAX_POPULATION) return;
-
         float[] sp = spawnPoint(camera);
         float sx = sp[0], sy = sp[1], sz = sp[2];
         if (sy < Ground.WATER_LEVEL + 0.5f) return;
         Tribe randomTribe = tribes.get(rng.nextInt(tribes.size()));
-
         switch (action) {
-            case SPAWN_TEEN        -> eaters.add(new Eater(Eater.Type.TEEN, sx, sz, randomTribe, rng));
-            case SPAWN_FAT         -> eaters.add(new Eater(Eater.Type.FAT, sx, sz, randomTribe, rng));
-            case SPAWN_MUSCULAR    -> eaters.add(new Eater(Eater.Type.MUSCULAR, sx, sz, randomTribe, rng));
-            case SPAWN_FEMALE      -> eaters.add(new Eater(Eater.Type.FEMALE, sx, sz, randomTribe, rng));
-            case SPAWN_PREGNANT    -> eaters.add(new Eater(Eater.Type.PREGNANT, sx, sz, randomTribe, rng));
-            case SPAWN_BABY        -> eaters.add(new Eater(Eater.Type.BABY, sx, sz, randomTribe, rng));
-            case SPAWN_YOUNG_BOY   -> eaters.add(new Eater(Eater.Type.YOUNG_BOY, sx, sz, randomTribe, rng));
-            case SPAWN_POOP        -> poops.add(Poop.random(sx, sz, rng));
+            case SPAWN_TEEN -> eaters.add(new Eater(Eater.Type.TEEN, sx, sz, randomTribe, rng));
+            case SPAWN_FAT -> eaters.add(new Eater(Eater.Type.FAT, sx, sz, randomTribe, rng));
+            case SPAWN_MUSCULAR -> eaters.add(new Eater(Eater.Type.MUSCULAR, sx, sz, randomTribe, rng));
+            case SPAWN_FEMALE -> eaters.add(new Eater(Eater.Type.FEMALE, sx, sz, randomTribe, rng));
+            case SPAWN_PREGNANT -> eaters.add(new Eater(Eater.Type.PREGNANT, sx, sz, randomTribe, rng));
+            case SPAWN_BABY -> eaters.add(new Eater(Eater.Type.BABY, sx, sz, randomTribe, rng));
+            case SPAWN_YOUNG_BOY -> eaters.add(new Eater(Eater.Type.YOUNG_BOY, sx, sz, randomTribe, rng));
+            case SPAWN_POOP -> poops.add(Poop.random(sx, sz, rng));
             case SPAWN_BRIGHT_POOP -> poops.add(Poop.bright(sx, sz, rng));
             case SPAWN_POOP_CLUSTER -> {
                 for (int i = 0; i < 5; i++) {
@@ -740,9 +727,7 @@ public final class Engine {
                     if ((eaters.size() + riggedModels.size()) >= Eater.MAX_POPULATION) break;
                     float a = rng.nextFloat() * (float) (Math.PI * 2);
                     float r = 0.5f + rng.nextFloat() * 3f;
-                    eaters.add(new Eater(Eater.Type.TEEN,
-                            sx + (float) Math.cos(a) * r,
-                            sz + (float) Math.sin(a) * r, randomTribe, rng));
+                    eaters.add(new Eater(Eater.Type.TEEN, sx + (float) Math.cos(a) * r, sz + (float) Math.sin(a) * r, randomTribe, rng));
                 }
             }
             case SPAWN_MRH_FEMALE -> {
@@ -750,8 +735,7 @@ public final class Engine {
                 String tex = "mesh/MrH/ww/texture_21.png";
                 if (new File(obj).exists()) {
                     try {
-                        // Женщина: стандартные параметры
-                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 1.7f, 0.15f, 1.5f));
+                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 1.7f, 0.11f, 1.57f));
                     } catch (Exception e) {
                         System.err.println("[ERROR] Failed to load Female: " + e.getMessage());
                     }
@@ -762,8 +746,7 @@ public final class Engine {
                 String tex = "mesh/MrH/kk/texture_84.png";
                 if (new File(obj).exists()) {
                     try {
-                        // Качок: 1.57f = ровно 90 градусов (строго вниз)
-                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 2.0f, 0.20f, 1.57f));
+                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 2.0f, 0.13f, 1.57f));
                     } catch (Exception e) {
                         System.err.println("[ERROR] Failed to load Kachok: " + e.getMessage());
                     }
@@ -774,8 +757,7 @@ public final class Engine {
                 String tex = "mesh/MrH/tt/texture_115.png";
                 if (new File(obj).exists()) {
                     try {
-                        // Толстяк: 1.57f = ровно 90 градусов (строго вниз)
-                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 1.9f, 0.24f, 1.57f));
+                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 1.9f, 0.14f, 1.57f));
                     } catch (Exception e) {
                         System.err.println("[ERROR] Failed to load Tolstiy: " + e.getMessage());
                     }
