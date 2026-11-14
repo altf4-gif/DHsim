@@ -2,30 +2,21 @@ package com.example.engine;
 
 /*
  * ============================ ГРАБЛИ — НЕ ПОВТОРЯТЬ ============================
- * РУКИ. Меш в T-позе, длинная ось руки = X. Длина руки ЗАПЕКАЕТСЯ В ВЕРШИНЫ
- * при загрузке: x' = pivot.x + (x - pivot.x) * armStretch, и ТОЛЬКО для вершин
- * "наружу" от плеча (d>0 для ArmR, d<0 для ArmL). Плечевой колпак не двигается,
- * шов не рвётся. НЕ переносить растяжку в matrix.scale() — рвёт плечо и тянет
- * колпак вверх. НЕ менять ось растяжки на Y.
- *
- * ДЛИНА. armStretch считается АВТОМАТИЧЕСКИ: кисти должны оказаться на
- * fingertip_y (0.38 роста от стоп = середина бедра). Аргумент конструктора
- * armStretch == 1.0 означает "авто", любое другое значение — ручной оверрайд.
- *
- * ПОРЯДОК ПОВОРОТОВ (JOML применяет к вершинам в обратном порядке вызовов):
- *   .rotateX(swing).rotateZ(drop)  =>  сначала опускаем руку, потом мах вперёд-назад.
- *
- * ПЛЕЧО. Резать у сустава: arm_x ~ 0.11..0.14 от ШИРИНЫ. Больше 0.16 — остаётся
- * горизонтальная "полка" и руки висят снаружи тела. Полки ShL/ShR — костыль,
- * по умолчанию выключены (dropShelf=false).
- *
- * ГОЛОВА. В Head идут только грани ВЫШЕ шеи и БЛИЗКО к центру (|cx| <= armCutX),
- * иначе дельты уезжают в голову.
- *
- * ШАГ. Фаза от пройденного расстояния (phase += step/cycleLen*2PI), иначе скользит.
- * bob на cos(phase*2): тело НИЖЕ всего при опоре на две ноги.
- * yaw = atan2(dx, dz) + facing_offset. Идёт спиной — facing_offset=3.14159.
- * =============================================================================
+ * 1. РУКИ РЕЖУТСЯ ТОЛЬКО ВЫШЕ ПОДМЫШКИ (armBandLow). Без этого условия пузо
+ *    толстяка и грудь качка шире плоскости реза и уезжают в "руки" -> мясо.
+ *    НЕ убирать проверку cy > armBandLow.
+ * 2. Линии реза (шея, подмышка, промежность) НАХОДЯТСЯ ПО ПРОФИЛЮ МЕША,
+ *    а не константой. Одна константа на все тела не работает.
+ * 3. ПИВОТ ноги = ТОЧНО линия реза (legCutY). rotateX не меняет x, поэтому
+ *    вершины на линии реза не двигаются вообще -> шов не рвётся. НЕ поднимать
+ *    пивот обратно на бедро — вернётся бахрома на шортах.
+ * 4. Длина руки ЗАПЕКАЕТСЯ В ВЕРШИНЫ по X, только "наружу" от плеча.
+ *    НЕ переносить в matrix.scale() — рвёт плечевой колпак.
+ * 5. JOML применяет повороты к вершинам в обратном порядке вызовов:
+ *    .rotateX(swing).rotateZ(drop) => сначала опустить, потом мах вперёд-назад.
+ * 6. Голова режется ПЕРЕД руками (всё выше шеи — голова), иначе причёска
+ *    уезжает в руку и падает на 90 градусов.
+ * ===========================================================================
  */
 
 import org.joml.Matrix4f;
@@ -41,6 +32,7 @@ import java.io.File;
 import java.io.FileReader;
 import java.nio.FloatBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -50,16 +42,21 @@ public final class RiggedModel {
 
     private static final String CFG_PATH = "mesh/MrH/rig.txt";
     private static final String STEP_SFX = "mp3/steps-10.mp3";
-    private static final String[] NAMES = {"Head", "Torso", "ArmL", "ArmR", "LegL", "LegR", "ShL", "ShR"};
+    private static final String[] NAMES = {"Head", "Torso", "ArmL", "ArmR", "LegL", "LegR"};
 
-    // ---------------- конфиг (читается из rig.txt) ----------------
-    private static float NECK_FRAC      = 0.85f;
-    private static float HIP_FRAC       = 0.45f;
-    private static float SHOULDER_FRAC  = 0.80f;
-    private static float ARM_CUT_FRAC   = 0.11f;   // доля ШИРИНЫ
-    private static float LEG_PIVOT_FRAC = 0.05f;   // доля ШИРИНЫ
-    private static float FINGERTIP_FRAC = 0.38f;   // доля РОСТА от стоп
+    // ---------------- конфиг ----------------
+    private static boolean AUTO_RIG      = true;
+    private static float NECK_FRAC      = 0.85f;   // fallback
+    private static float HIP_FRAC       = 0.45f;   // fallback
+    private static float SHOULDER_FRAC  = 0.80f;   // fallback
+    private static float ARM_CUT_FRAC   = 0.13f;   // fallback
+    private static float LEG_PIVOT_FRAC = 0.05f;
+    private static float FINGERTIP_FRAC = 0.38f;   // куда достают кисти (доля роста от стоп)
     private static float ARM_STRETCH_CFG = 0f;     // 0 = авто
+    private static float ARM_BAND_RATIO = 0.55f;   // где заканчивается "полоса рук" в профиле
+    private static float ARM_MARGIN     = 1.02f;   // рез чуть снаружи торса
+    private static float ARM_BAND_PAD   = 0.02f;   // запас вниз от подмышки
+    private static float LEG_GAP        = 0.015f;  // щель между ног (доля ширины)
     private static float LEG_AMP        = 0.45f;
     private static float ARM_AMP        = 0.28f;
     private static float BOB_AMP        = 0.018f;
@@ -70,9 +67,7 @@ public final class RiggedModel {
     private static float TURN_RATE      = 4.0f;
     private static float IDLE_MIN       = 1.0f;
     private static float IDLE_MAX       = 3.5f;
-    private static float PELVIS_MARGIN  = 0.08f;
-    private static float SHELF_Y        = 0.70f;
-    private static float GRAB_FRAC      = 0.45f;
+    private static float PELVIS_MARGIN  = 0.08f;   // fallback для линии реза ног
     private static float FACING_OFFSET  = 0f;
     private static boolean STEP_SOUND   = true;
 
@@ -89,11 +84,10 @@ public final class RiggedModel {
     private final List<Part> parts = new ArrayList<>();
     private final Texture texture;
     private final Vector3f pos;
-    private final float armCutFrac;
+    private final float armCutArg;
     private final float armDropAngle;
-    private final float shoulderFrac;
+    private final float shoulderArg;
     private final float armStretchArg;
-    private final boolean dropShelf;
     private final float heightWorld;
     private final float seed;
 
@@ -113,16 +107,14 @@ public final class RiggedModel {
     private final Matrix4f world = new Matrix4f();
     private final Matrix4f upper = new Matrix4f();
 
-    private final Vector3f hipP   = new Vector3f();
-    private final Vector3f neckP  = new Vector3f();
-    private final Vector3f shLP   = new Vector3f();
-    private final Vector3f shRP   = new Vector3f();
-    private final Vector3f hipLP  = new Vector3f();
-    private final Vector3f hipRP  = new Vector3f();
-    private final Vector3f shelfLP = new Vector3f();
-    private final Vector3f shelfRP = new Vector3f();
+    private final Vector3f hipP  = new Vector3f();
+    private final Vector3f neckP = new Vector3f();
+    private final Vector3f shLP  = new Vector3f();
+    private final Vector3f shRP  = new Vector3f();
+    private final Vector3f hipLP = new Vector3f();
+    private final Vector3f hipRP = new Vector3f();
 
-    // ---------------- конструкторы (сигнатуры не менять — Engine их зовёт) ----------------
+    // ---------------- конструкторы (сигнатуры не менять) ----------------
 
     public RiggedModel(String objPath, String texPath, float x, float z, float targetHeight) {
         this(objPath, texPath, x, z, targetHeight, -1f, 1.57f, 0.80f, 1.0f, false);
@@ -147,19 +139,19 @@ public final class RiggedModel {
         this(objPath, texPath, x, z, targetHeight, armCutFrac, armDropAngle, shoulderFrac, armStretch, false);
     }
 
+    /** dropShelf оставлен для совместимости — полки больше не нужны, игнорируется. */
     public RiggedModel(String objPath, String texPath, float x, float z, float targetHeight,
                        float armCutFrac, float armDropAngle, float shoulderFrac,
                        float armStretch, boolean dropShelf) {
         loadConfig();
         this.pos = new Vector3f(x, Ground.getHeightAt(x, z), z);
         this.texture = texPath != null ? new Texture(texPath, false, false) : null;
-        this.armCutFrac   = armCutFrac < 0f ? ARM_CUT_FRAC : armCutFrac;
-        this.armDropAngle = armDropAngle;
-        this.shoulderFrac = shoulderFrac > 0f ? shoulderFrac : SHOULDER_FRAC;
+        this.armCutArg     = armCutFrac;
+        this.armDropAngle  = armDropAngle;
+        this.shoulderArg   = shoulderFrac;
         this.armStretchArg = armStretch;
-        this.dropShelf    = dropShelf;
-        this.heightWorld  = targetHeight;
-        this.walkSpeed    = WALK_SPEED_CFG;
+        this.heightWorld   = targetHeight;
+        this.walkSpeed     = WALK_SPEED_CFG;
         this.seed  = rng.nextFloat() * 10f;
         this.phase = rng.nextFloat() * (float) (Math.PI * 2);
         this.idleTimer = 0.5f + rng.nextFloat() * 2f;
@@ -169,11 +161,7 @@ public final class RiggedModel {
 
         System.out.println("[RIG] " + new File(objPath).getName()
                 + " h=" + modelHeight + " scale=" + scale
-                + " cut=" + this.armCutFrac + " drop=" + armDropAngle
-                + " armStretch=" + this.armStretch + " shelf=" + dropShelf);
-        if (this.armCutFrac > 0.16f)
-            System.out.println("[RIG] WARNING: cut=" + this.armCutFrac
-                    + " великоват — будет полка на плече. Ставь 0.11..0.14 и dropShelf=false.");
+                + " drop=" + armDropAngle + " armStretch=" + this.armStretch);
 
         pickNewTarget();
         updateMatrices();
@@ -185,10 +173,7 @@ public final class RiggedModel {
         if (cfgLoaded) return;
         cfgLoaded = true;
         File f = new File(CFG_PATH);
-        if (!f.exists()) {
-            System.out.println("[RIG] " + CFG_PATH + " нет — defaults");
-            return;
-        }
+        if (!f.exists()) { System.out.println("[RIG] " + CFG_PATH + " нет — defaults"); return; }
         try (BufferedReader br = new BufferedReader(new FileReader(f))) {
             String line;
             while ((line = br.readLine()) != null) {
@@ -203,34 +188,35 @@ public final class RiggedModel {
                 try { v = Float.parseFloat(line.substring(eq + 1).trim()); }
                 catch (NumberFormatException e) { continue; }
                 switch (k) {
-                    case "neck_y"        -> NECK_FRAC = v;
-                    case "hip_y"         -> HIP_FRAC = v;
-                    case "shoulder_y"    -> SHOULDER_FRAC = v;
-                    case "arm_x"         -> ARM_CUT_FRAC = v;
-                    case "leg_x"         -> LEG_PIVOT_FRAC = v;
-                    case "fingertip_y"   -> FINGERTIP_FRAC = v;
-                    case "arm_stretch"   -> ARM_STRETCH_CFG = v;
-                    case "leg_swing"     -> LEG_AMP = v;
-                    case "arm_swing"     -> ARM_AMP = v;
-                    case "bob"           -> BOB_AMP = v;
-                    case "stride"        -> STRIDE_FRAC = v;
-                    case "walk_speed"    -> WALK_SPEED_CFG = v;
-                    case "lean"          -> LEAN_WALK = v;
-                    case "sway"          -> SWAY_AMP = v;
-                    case "turn_rate"     -> TURN_RATE = v;
-                    case "idle_min"      -> IDLE_MIN = v;
-                    case "idle_max"      -> IDLE_MAX = v;
-                    case "pelvis_margin" -> PELVIS_MARGIN = v;
-                    case "shelf_y"       -> SHELF_Y = v;
-                    case "grab_frac"     -> GRAB_FRAC = v;
-                    case "facing_offset" -> FACING_OFFSET = v;
-                    case "step_sound"    -> STEP_SOUND = v > 0.5f;
+                    case "auto_rig"       -> AUTO_RIG = v > 0.5f;
+                    case "neck_y"         -> NECK_FRAC = v;
+                    case "hip_y"          -> HIP_FRAC = v;
+                    case "shoulder_y"     -> SHOULDER_FRAC = v;
+                    case "arm_x"          -> ARM_CUT_FRAC = v;
+                    case "leg_x"          -> LEG_PIVOT_FRAC = v;
+                    case "fingertip_y"    -> FINGERTIP_FRAC = v;
+                    case "arm_stretch"    -> ARM_STRETCH_CFG = v;
+                    case "arm_band_ratio" -> ARM_BAND_RATIO = v;
+                    case "arm_margin"     -> ARM_MARGIN = v;
+                    case "arm_band_pad"   -> ARM_BAND_PAD = v;
+                    case "leg_gap"        -> LEG_GAP = v;
+                    case "leg_swing"      -> LEG_AMP = v;
+                    case "arm_swing"      -> ARM_AMP = v;
+                    case "bob"            -> BOB_AMP = v;
+                    case "stride"         -> STRIDE_FRAC = v;
+                    case "walk_speed"     -> WALK_SPEED_CFG = v;
+                    case "lean"           -> LEAN_WALK = v;
+                    case "sway"           -> SWAY_AMP = v;
+                    case "turn_rate"      -> TURN_RATE = v;
+                    case "idle_min"       -> IDLE_MIN = v;
+                    case "idle_max"       -> IDLE_MAX = v;
+                    case "pelvis_margin"  -> PELVIS_MARGIN = v;
+                    case "facing_offset"  -> FACING_OFFSET = v;
+                    case "step_sound"     -> STEP_SOUND = v > 0.5f;
                     default -> { }
                 }
             }
-            System.out.println("[RIG] config: fingertip_y=" + FINGERTIP_FRAC
-                    + " arm_x=" + ARM_CUT_FRAC + " hip_y=" + HIP_FRAC
-                    + " leg_swing=" + LEG_AMP + " arm_swing=" + ARM_AMP);
+            System.out.println("[RIG] config: auto_rig=" + AUTO_RIG + " fingertip_y=" + FINGERTIP_FRAC);
         } catch (Exception e) {
             System.err.println("[RIG] ошибка чтения " + CFG_PATH + ": " + e.getMessage());
         }
@@ -254,7 +240,6 @@ public final class RiggedModel {
         float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
         float minZ = Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
 
-        // проход 1: вершины + bbox
         try (BufferedReader br = new BufferedReader(new FileReader(path))) {
             String line;
             while ((line = br.readLine()) != null) {
@@ -280,24 +265,91 @@ public final class RiggedModel {
         }
         if (verts.isEmpty()) return 1f;
 
-        float height = Math.max(maxY - minY, 0.01f);
-        float width  = Math.max(maxX - minX, 0.01f);
+        float height  = Math.max(maxY - minY, 0.01f);
+        float width   = Math.max(maxX - minX, 0.01f);
         float centerX = (minX + maxX) / 2f;
         float centerZ = (minZ + maxZ) / 2f;
 
-        float worldNeckY  = minY + NECK_FRAC * height;
-        float worldHipY   = minY + HIP_FRAC  * height;
-        float worldShelfY = minY + SHELF_Y   * height;
+        // ================= ПРОФИЛЬ МЕША =================
+        final int NB = 160;
+        float[] halfW  = new float[NB];              // max |x| в слое
+        float[] minAbs = new float[NB];              // min |x| в слое (щель между ног)
+        int[]   cnt    = new int[NB];
+        Arrays.fill(minAbs, Float.MAX_VALUE);
+        for (int i = 0; i < verts.size(); i += 3) {
+            float ax = Math.abs(verts.get(i) - centerX);
+            float y  = verts.get(i + 1) - minY;
+            int b = Math.max(0, Math.min(NB - 1, (int) (y / height * NB)));
+            halfW[b] = Math.max(halfW[b], ax);
+            minAbs[b] = Math.min(minAbs[b], ax);
+            cnt[b]++;
+        }
 
-        float armCutX   = width * armCutFrac;
-        float grabX     = armCutX * GRAB_FRAC;
-        float legPivotX = width * LEG_PIVOT_FRAC;
+        float neckY, shoulderY, armpitY, armCutX, legCutY;
 
-        float localNeckY     = NECK_FRAC * height;
-        float localHipY      = HIP_FRAC  * height;
-        float localShoulderY = shoulderFrac * height;
+        if (AUTO_RIG) {
+            // 1) полоса рук = самая широкая часть ВЫШЕ середины роста
+            int peak = NB / 2;
+            for (int b = NB / 2; b < NB; b++) if (cnt[b] > 0 && halfW[b] > halfW[peak]) peak = b;
+            float maxHalf = Math.max(halfW[peak], 1e-4f);
+            float thr = ARM_BAND_RATIO * maxHalf;
 
-        // проход 2: раскидываем грани по частям + меряем кончики пальцев
+            int down = peak;
+            while (down > 0 && (cnt[down] == 0 || halfW[down] >= thr)) down--;
+            int up = peak;
+            while (up < NB - 1 && (cnt[up] == 0 || halfW[up] >= thr)) up++;
+
+            armpitY   = (down + 0.5f) / NB * height;
+            float armTopY = (up + 0.5f) / NB * height;
+            shoulderY = (armpitY + armTopY) * 0.5f;
+
+            // 2) рез плеча = край торса сразу под подмышкой
+            float torsoHalf = 0f;
+            int from = Math.max(0, down - (int) (0.10f * NB));
+            for (int b = from; b <= down; b++) torsoHalf = Math.max(torsoHalf, halfW[b]);
+            armCutX = torsoHalf * ARM_MARGIN;
+            if (armCutX < 0.04f * width || armCutX > 0.40f * width) {   // детект не удался
+                armCutX = width * (armCutArg > 0f ? armCutArg : ARM_CUT_FRAC);
+                shoulderY = (shoulderArg > 0f ? shoulderArg : SHOULDER_FRAC) * height;
+                armpitY = shoulderY - 0.10f * height;
+                System.out.println("[RIG] auto-detect плеча не удался — fallback");
+            }
+
+            // 3) шея = самое узкое место между головой и плечами
+            int neckBin = -1;
+            float best = Float.MAX_VALUE;
+            for (int b = (int) (0.72f * NB); b < (int) (0.94f * NB); b++) {
+                if (cnt[b] > 0 && halfW[b] < best) { best = halfW[b]; neckBin = b; }
+            }
+            neckY = neckBin >= 0 ? (neckBin + 0.5f) / NB * height : NECK_FRAC * height;
+            if (neckY <= shoulderY) neckY = Math.min(0.93f * height, shoulderY + 0.06f * height);
+
+            // 4) промежность = самый верхний слой с щелью между ног
+            int hipBin = (int) (HIP_FRAC * NB);
+            int gapBin = -1;
+            for (int b = 1; b <= hipBin; b++)
+                if (cnt[b] > 0 && minAbs[b] > LEG_GAP * width) gapBin = b;
+            legCutY = gapBin >= 0 ? (gapBin + 1.0f) / NB * height
+                                  : (HIP_FRAC - PELVIS_MARGIN) * height;
+            legCutY = Math.max(0.22f * height, Math.min(legCutY, HIP_FRAC * height));
+        } else {
+            neckY     = NECK_FRAC * height;
+            shoulderY = (shoulderArg > 0f ? shoulderArg : SHOULDER_FRAC) * height;
+            armCutX   = width * (armCutArg > 0f ? armCutArg : ARM_CUT_FRAC);
+            armpitY   = shoulderY - 0.10f * height;
+            legCutY   = (HIP_FRAC - PELVIS_MARGIN) * height;
+        }
+
+        float armBandLow  = armpitY - ARM_BAND_PAD * height;
+        float legPivotX   = width * LEG_PIVOT_FRAC;
+        float worldNeckY  = minY + neckY;
+        float worldBandY  = minY + armBandLow;
+        float worldLegY   = minY + legCutY;
+
+        System.out.printf("[RIG] auto: neck=%.3f shoulder=%.3f armpit=%.3f armCut=%.3fW legCut=%.3f%n",
+                neckY / height, shoulderY / height, armpitY / height, armCutX / width, legCutY / height);
+
+        // ================= РАЗБОР ГРАНЕЙ =================
         float tipR = -Float.MAX_VALUE, tipL = Float.MAX_VALUE;
         try (BufferedReader br = new BufferedReader(new FileReader(path))) {
             String line;
@@ -320,19 +372,11 @@ public final class RiggedModel {
                 cx /= fv.size(); cy /= fv.size();
 
                 String part;
-                if (cy > worldHipY) {
-                    if (cy > worldNeckY && Math.abs(cx) <= armCutX)      part = "Head";
-                    else if (cx < -armCutX)                              part = "ArmL";
-                    else if (cx >  armCutX)                              part = "ArmR";
-                    else if (dropShelf && cy > worldShelfY && cx < -grabX) part = "ShL";
-                    else if (dropShelf && cy > worldShelfY && cx >  grabX) part = "ShR";
-                    else                                                 part = "Torso";
-                } else {
-                    // шов таза прячем под шорты
-                    if (cy > worldHipY - PELVIS_MARGIN * height && Math.abs(cx) < legPivotX * 2.6f)
-                        part = "Torso";
-                    else part = cx < 0 ? "LegL" : "LegR";
-                }
+                if (cy > worldNeckY)                                   part = "Head";
+                else if (cy > worldBandY && cx < -armCutX)             part = "ArmL";
+                else if (cy > worldBandY && cx >  armCutX)             part = "ArmR";
+                else if (cy > worldLegY)                               part = "Torso";
+                else                                                   part = cx < 0 ? "LegL" : "LegR";
 
                 if (part.equals("ArmR")) for (int v : fv) tipR = Math.max(tipR, verts.get(v * 3));
                 if (part.equals("ArmL")) for (int v : fv) tipL = Math.min(tipL, verts.get(v * 3));
@@ -348,7 +392,7 @@ public final class RiggedModel {
             System.err.println("[RIG] ошибка разбора граней: " + e.getMessage());
         }
 
-        // ---- АВТО-ДЛИНА РУКИ: кисти на fingertip_y (середина бедра) ----
+        // ================= ДЛИНА РУКИ =================
         float lenR = tipR > -Float.MAX_VALUE / 2 ? (tipR - centerX) - armCutX : 0f;
         float lenL = tipL <  Float.MAX_VALUE / 2 ? (centerX - tipL) - armCutX : 0f;
         float armLen = Math.max(lenR, lenL);
@@ -356,34 +400,27 @@ public final class RiggedModel {
 
         float dropSin = (float) Math.abs(Math.sin(armDropAngle));
         if (dropSin < 0.2f) dropSin = 1f;
-        float needLen = (localShoulderY - FINGERTIP_FRAC * height) / dropSin;
+        float needLen = (shoulderY - FINGERTIP_FRAC * height) / dropSin;
 
         float manual = (armStretchArg > 0.01f && Math.abs(armStretchArg - 1f) > 1e-3f)
                 ? armStretchArg : ARM_STRETCH_CFG;
         armStretch = manual > 0.01f ? manual : (armLen > 1e-4f ? needLen / armLen : 1f);
-        armStretch = Math.max(0.5f, Math.min(2.5f, armStretch));
+        armStretch = Math.max(0.6f, Math.min(2.2f, armStretch));
 
-        System.out.println("[RIG] armLen=" + armLen + " need=" + needLen
-                + " -> stretch=" + armStretch + " (кисти на " + FINGERTIP_FRAC + " роста)");
+        System.out.println("[RIG] armLen=" + armLen + " need=" + needLen + " -> stretch=" + armStretch);
 
-        hipP.set(0, localHipY, 0);
-        neckP.set(0, localNeckY, 0);
-        shLP.set(-armCutX, localShoulderY, 0);
-        shRP.set( armCutX, localShoulderY, 0);
-        hipLP.set(-legPivotX, localHipY, 0);
-        hipRP.set( legPivotX, localHipY, 0);
-        shelfLP.set(-grabX, localShoulderY, 0);
-        shelfRP.set( grabX, localShoulderY, 0);
+        hipP.set(0, legCutY, 0);
+        neckP.set(0, neckY, 0);
+        shLP.set(-armCutX, shoulderY, 0);
+        shRP.set( armCutX, shoulderY, 0);
+        hipLP.set(-legPivotX, legCutY, 0);   // pivotY == линия реза -> шов не рвётся
+        hipRP.set( legPivotX, legCutY, 0);
 
-        // ---- сборка буферов (+ запекание длины руки) ----
+        // ================= БУФЕРЫ =================
         for (String name : NAMES) {
             List<Integer> vi = pv.get(name);
             List<Integer> ui = pu.get(name);
-            if (vi.isEmpty()) {
-                if (!name.equals("ShL") && !name.equals("ShR"))
-                    System.out.println("[RIG] WARNING: part " + name + " EMPTY");
-                continue;
-            }
+            if (vi.isEmpty()) { System.out.println("[RIG] WARNING: part " + name + " EMPTY"); continue; }
 
             Part p = new Part();
             p.name = name;
@@ -395,8 +432,6 @@ public final class RiggedModel {
                 case "ArmR"  -> new Vector3f(shRP);
                 case "LegL"  -> new Vector3f(hipLP);
                 case "LegR"  -> new Vector3f(hipRP);
-                case "ShL"   -> new Vector3f(shelfLP);
-                case "ShR"   -> new Vector3f(shelfRP);
                 default      -> new Vector3f(0, 0, 0);
             };
 
@@ -413,7 +448,7 @@ public final class RiggedModel {
                 if (isArm) {
                     float d = x - p.pivot.x;
                     boolean outward = name.equals("ArmR") ? d > 0f : d < 0f;
-                    if (outward) x = p.pivot.x + d * armStretch;   // <-- ВСЯ МАГИЯ ТУТ
+                    if (outward) x = p.pivot.x + d * armStretch;
                 }
 
                 data[i*5]     = x;
@@ -550,13 +585,11 @@ public final class RiggedModel {
         for (Part p : parts) {
             switch (p.name) {
                 case "Torso" -> p.mat.set(upper);
-                case "Head"  -> rot(p, upper, neckP,   lookPitch, lookYaw, 0f);
-                case "ArmL"  -> rot(p, upper, shLP,   -armL, 0f,  drop);
-                case "ArmR"  -> rot(p, upper, shRP,   -armR, 0f, -drop);
-                case "ShL"   -> rot(p, upper, shelfLP, -armL, 0f,  drop);
-                case "ShR"   -> rot(p, upper, shelfRP, -armR, 0f, -drop);
-                case "LegL"  -> rot(p, world, hipLP,  -legL, 0f, 0f);
-                case "LegR"  -> rot(p, world, hipRP,  -legR, 0f, 0f);
+                case "Head"  -> rot(p, upper, neckP, lookPitch, lookYaw, 0f);
+                case "ArmL"  -> rot(p, upper, shLP, -armL, 0f,  drop);
+                case "ArmR"  -> rot(p, upper, shRP, -armR, 0f, -drop);
+                case "LegL"  -> rot(p, world, hipLP, -legL, 0f, 0f);
+                case "LegR"  -> rot(p, world, hipRP, -legR, 0f, 0f);
                 default      -> p.mat.set(world);
             }
         }
@@ -577,7 +610,6 @@ public final class RiggedModel {
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
     }
 
-    /** Вызывать внутри shadow-прохода с уже забинденным shadowShader. */
     public void renderShadow(ShaderProgram shadowShader, Matrix4f lightVP) {
         shadowShader.setUniform("uLightVP", lightVP);
         if (texture != null) texture.bind();
