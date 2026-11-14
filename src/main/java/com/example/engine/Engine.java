@@ -302,7 +302,6 @@ public final class Engine {
         String mrhTexPath = "mesh/MrH/texture_21.png";
         if (new File(mrhObjPath).exists()) {
             try {
-                // MrH: dropShelf=false
                 riggedModels.add(new RiggedModel(mrhObjPath, mrhTexPath, 10f, 10f, 2.0f, 0.11f, 1.57f, 0.80f, 1.0f, false));
                 System.out.println("  -> MrH loaded.");
             } catch (Exception e) {
@@ -549,7 +548,7 @@ public final class Engine {
                     for (Tribe tribe : world.tribes) {
                         for (HouseInstance h : tribe.houses) h.render(shadowShader, camera.view(), camera.projection());
                     }
-                    renderRiggedShadows(riggedModels, shadowShader, lightVP);
+                    renderRiggedShadows(riggedModels, lightVP);
                     shadowShader.unbind();
                     GL11.glDisable(GL11.GL_DEPTH_TEST);
                     GL11.glEnable(GL11.GL_BLEND);
@@ -588,7 +587,9 @@ public final class Engine {
                 }
                 for (HouseInstance t : staticTrees) t.render(houseShader, camera.view(), camera.projection());
                 for (HouseInstance p : staticProps) p.render(houseShader, camera.view(), camera.projection());
-                renderRigged(riggedModels, houseShader, camera.view(), camera.projection());
+                renderRigged(riggedModels, camera.view(), camera.projection(),
+                        lightVP, shadowMap.textureId(),
+                        sunDir, sunColor, ambient, camPos, fogColor, fogDensity);
                 houseShader.unbind();
                 Poop.begin(camera.view(), camera.projection(), camPos, fogColor, fogDensity);
                 Vector3f tint = new Vector3f(
@@ -653,22 +654,21 @@ public final class Engine {
         }
     }
 
-    /** Персонажи в теневом проходе. Вызывать при уже забинденном shadowShader. */
-    private static void renderRiggedShadows(List<RiggedModel> models,
-                                            ShaderProgram shadowShader, Matrix4f lightVP) {
+    /** Персонажи в теневом проходе. */
+    private static void renderRiggedShadows(List<RiggedModel> models, Matrix4f lightVP) {
         if (models == null || models.isEmpty()) return;
-        shadowShader.setUniform1f("uWhiteKey", 0f);
-        for (RiggedModel m : models) m.renderShadow(shadowShader, lightVP);
-        shadowShader.setUniform1f("uWhiteKey", 1f);
+        for (RiggedModel m : models) m.renderShadow(lightVP);
     }
 
-    /** Персонажи в основном проходе. Вызывать при уже забинденном houseShader. */
-    private static void renderRigged(List<RiggedModel> models, ShaderProgram houseShader,
-                                     Matrix4f view, Matrix4f proj) {
+    /** Персонажи в основном проходе (свой скининг-шейдер). */
+    private static void renderRigged(List<RiggedModel> models,
+                                     Matrix4f view, Matrix4f proj,
+                                     Matrix4f lightVP, int shadowTex,
+                                     Vector3f sunDir, Vector3f sunColor, Vector3f ambient,
+                                     Vector3f camPos, Vector3f fogColor, float fogDensity) {
         if (models == null || models.isEmpty()) return;
-        houseShader.setUniform1f("uWhiteKey", 0f);
-        for (RiggedModel m : models) m.render(houseShader, view, proj);
-        houseShader.setUniform1f("uWhiteKey", 1f);
+        for (RiggedModel m : models)
+            m.render(view, proj, lightVP, shadowTex, sunDir, sunColor, ambient, camPos, fogColor, fogDensity);
     }
 
     private static float[] spawnPoint(Camera camera) {
@@ -747,7 +747,6 @@ public final class Engine {
                 String tex = "mesh/MrH/kk/texture_84.png";
                 if (new File(obj).exists()) {
                     try {
-                        // Качок: dropShelf=false (плечо режется у сустава)
                         riggedModels.add(new RiggedModel(obj, tex, sx, sz, 2.0f, 0.13f, 1.57f, 0.80f, 1.0f, false));
                     } catch (Exception e) {
                         System.err.println("[ERROR] Failed to load Kachok: " + e.getMessage());
@@ -759,7 +758,6 @@ public final class Engine {
                 String tex = "mesh/MrH/tt/texture_115.png";
                 if (new File(obj).exists()) {
                     try {
-                        // Толстяк: dropShelf=false (плечо режется у сустава)
                         riggedModels.add(new RiggedModel(obj, tex, sx, sz, 1.9f, 0.14f, 1.57f, 0.80f, 1.0f, false));
                     } catch (Exception e) {
                         System.err.println("[ERROR] Failed to load Tolstiy: " + e.getMessage());

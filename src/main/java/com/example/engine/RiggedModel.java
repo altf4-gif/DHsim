@@ -2,26 +2,26 @@ package com.example.engine;
 
 /*
  * ============================ ГРАБЛИ — НЕ ПОВТОРЯТЬ ============================
- * 1. РУКИ РЕЖУТСЯ ТОЛЬКО ВЫШЕ ПОДМЫШКИ (armBandLow). Без этого условия пузо
- *    толстяка и грудь качка шире плоскости реза и уезжают в "руки" -> мясо.
- *    НЕ убирать проверку cy > armBandLow.
- * 2. Линии реза (шея, подмышка, промежность) НАХОДЯТСЯ ПО ПРОФИЛЮ МЕША,
- *    а не константой. Одна константа на все тела не работает.
- * 3. ПИВОТ ноги = ТОЧНО линия реза (legCutY). rotateX не меняет x, поэтому
- *    вершины на линии реза не двигаются вообще -> шов не рвётся. НЕ поднимать
- *    пивот обратно на бедро — вернётся бахрома на шортах.
- * 4. Длина руки ЗАПЕКАЕТСЯ В ВЕРШИНЫ по X, только "наружу" от плеча.
- *    НЕ переносить в matrix.scale() — рвёт плечевой колпак.
- * 5. JOML применяет повороты к вершинам в обратном порядке вызовов:
+ * 1. МЕШ НЕ РЕЗАТЬ НА КУСКИ. Скининг (LBS): один VAO, у вершины до 4 костей
+ *    с весами. Вершина на шве получает ~0.5/0.5 -> шов сварен при любом угле.
+ *    Как только вернёшь жёсткие части — вернутся дырки на плечах и тазу.
+ * 2. Веса — разбиение единицы: wTorso = 1 - wHead - wArm - wLeg. Всегда.
+ *    Иначе меш либо раздувает, либо схлопывает.
+ * 3. Руки только ВЫШЕ подмышки (armBandLow), иначе пузо толстяка уезжает в руку.
+ * 4. Линии реза (шея/подмышка/промежность) ищутся ПО ПРОФИЛЮ МЕША, не константой.
+ * 5. Длина руки и отступ наружу запекаются в rest-позицию, УМНОЖЕННЫЕ НА ВЕС
+ *    руки. Без умножения на вес шов разъезжается.
+ * 6. Кости в ЛОКАЛЬНОМ пространстве, world применяется один раз в uModel.
+ * 7. JOML: повороты к вершинам в обратном порядке вызовов.
  *    .rotateX(swing).rotateZ(drop) => сначала опустить, потом мах вперёд-назад.
- * 6. Голова режется ПЕРЕД руками (всё выше шеи — голова), иначе причёска
- *    уезжает в руку и падает на 90 градусов.
+ * 8. Пивот ноги = линия реза ног. rotateX не меняет x -> кромка не ползёт.
  * ===========================================================================
  */
 
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL13;
 import org.lwjgl.opengl.GL15;
 import org.lwjgl.opengl.GL20;
 import org.lwjgl.opengl.GL30;
@@ -42,77 +42,185 @@ public final class RiggedModel {
 
     private static final String CFG_PATH = "mesh/MrH/rig.txt";
     private static final String STEP_SFX = "mp3/steps-10.mp3";
-    private static final String[] NAMES = {"Head", "Torso", "ArmL", "ArmR", "LegL", "LegR"};
+
+    // индексы костей
+    private static final int B_TORSO = 0, B_HEAD = 1, B_ARM_L = 2, B_ARM_R = 3, B_LEG_L = 4, B_LEG_R = 5;
+    private static final int NUM_BONES = 6;
 
     // ---------------- конфиг ----------------
-    private static boolean AUTO_RIG      = true;
-    private static float NECK_FRAC      = 0.85f;   // fallback
-    private static float HIP_FRAC       = 0.45f;   // fallback
-    private static float SHOULDER_FRAC  = 0.80f;   // fallback
-    private static float ARM_CUT_FRAC   = 0.13f;   // fallback
-    private static float LEG_PIVOT_FRAC = 0.05f;
-    private static float FINGERTIP_FRAC = 0.38f;   // куда достают кисти (доля роста от стоп)
-    private static float ARM_STRETCH_CFG = 0f;     // 0 = авто
-    private static float ARM_BAND_RATIO = 0.55f;   // где заканчивается "полоса рук" в профиле
-    private static float ARM_MARGIN     = 1.02f;   // рез чуть снаружи торса
-    private static float ARM_BAND_PAD   = 0.02f;   // запас вниз от подмышки
-    private static float LEG_GAP        = 0.015f;  // щель между ног (доля ширины)
-    private static float LEG_AMP        = 0.45f;
-    private static float ARM_AMP        = 0.28f;
-    private static float BOB_AMP        = 0.018f;
-    private static float STRIDE_FRAC    = 0.45f;
-    private static float WALK_SPEED_CFG = 1.5f;
-    private static float LEAN_WALK      = 0.06f;
-    private static float SWAY_AMP       = 0.02f;
-    private static float TURN_RATE      = 4.0f;
-    private static float IDLE_MIN       = 1.0f;
-    private static float IDLE_MAX       = 3.5f;
-    private static float PELVIS_MARGIN  = 0.08f;   // fallback для линии реза ног
-    private static float FACING_OFFSET  = 0f;
-    private static boolean STEP_SOUND   = true;
+    private static boolean AUTO_RIG       = true;
+    private static float NECK_FRAC        = 0.85f;
+    private static float HIP_FRAC         = 0.45f;
+    private static float SHOULDER_FRAC    = 0.80f;
+    private static float ARM_CUT_FRAC     = 0.13f;
+    private static float FINGERTIP_FRAC   = 0.38f;
+    private static float ARM_STRETCH_CFG  = 0f;      // 0 = авто
+    private static float ARM_BAND_RATIO   = 0.55f;
+    private static float ARM_MARGIN       = 1.02f;
+    private static float ARM_BAND_PAD     = 0.02f;
+    private static float LEG_GAP          = 0.015f;
+    private static float ARM_OUT_CFG      = -1f;     // -1 = авто-зазор, иначе доля ШИРИНЫ
+    private static float ARM_OUT_MARGIN   = 0.012f;  // зазор до тела, доля ширины
+    private static float ARM_OUT_MAX      = 0.08f;   // потолок отступа, доля ширины
+    private static float BLEND_X          = 0.030f;  // мягкость шва плеча, доля ширины
+    private static float BLEND_Y          = 0.030f;  // мягкость шва шеи/таза, доля роста
+    private static float LEG_AMP          = 0.45f;
+    private static float ARM_AMP          = 0.28f;
+    private static float BOB_AMP          = 0.018f;
+    private static float STRIDE_FRAC      = 0.45f;
+    private static float WALK_SPEED_CFG   = 1.5f;
+    private static float LEAN_WALK        = 0.06f;
+    private static float SWAY_AMP         = 0.02f;
+    private static float TURN_RATE        = 4.0f;
+    private static float IDLE_MIN         = 1.0f;
+    private static float IDLE_MAX         = 3.5f;
+    private static float PELVIS_MARGIN    = 0.08f;
+    private static float FACING_OFFSET    = 0f;
+    private static boolean STEP_SOUND     = true;
+
+    /** оверрайды отступа по имени файла: out_womento=0.03 */
+    private static final Map<String, Float> OUT_OVERRIDES = new LinkedHashMap<>();
 
     private static boolean cfgLoaded = false;
     private static long lastStepMs = 0L;
 
-    private static final class Part {
-        int vao, vbo, count;
-        String name;
-        Vector3f pivot;
-        final Matrix4f mat = new Matrix4f();
-    }
+    // ---------------- общие шейдеры ----------------
+    private static ShaderProgram skinShader, skinShadowShader;
+    private static int shaderUsers = 0;
 
-    private final List<Part> parts = new ArrayList<>();
+    private static final String SKIN_VERT = """
+            #version 330 core
+            layout (location = 0) in vec3 aPos;
+            layout (location = 1) in vec2 aTexCoord;
+            layout (location = 2) in vec4 aBoneIds;
+            layout (location = 3) in vec4 aWeights;
+
+            uniform mat4 uBones[6];
+            uniform mat4 uModel;
+            uniform mat4 uView;
+            uniform mat4 uProjection;
+
+            out vec2 vTexCoord;
+            out vec3 vWorld;
+
+            void main() {
+                mat4 skin = aWeights.x * uBones[int(aBoneIds.x)]
+                          + aWeights.y * uBones[int(aBoneIds.y)]
+                          + aWeights.z * uBones[int(aBoneIds.z)]
+                          + aWeights.w * uBones[int(aBoneIds.w)];
+                vec4 wp = uModel * skin * vec4(aPos, 1.0);
+                vWorld = wp.xyz;
+                vTexCoord = aTexCoord;
+                gl_Position = uProjection * uView * wp;
+            }
+            """;
+
+    private static final String SKIN_FRAG = """
+            #version 330 core
+            in vec2 vTexCoord;
+            in vec3 vWorld;
+            out vec4 FragColor;
+
+            uniform sampler2D uTexture;
+            uniform sampler2D uShadowMap;
+            uniform mat4 uLightVP;
+            uniform vec3 uSunDir;
+            uniform vec3 uSunColor;
+            uniform vec3 uAmbient;
+            uniform vec3 uCamPos;
+            uniform vec3 uFogColor;
+            uniform float uFogDensity;
+
+            float shadowCalc(vec4 lsp, vec3 n) {
+                vec3 p = lsp.xyz / lsp.w;
+                p = p * 0.5 + 0.5;
+                if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
+                float bias = max(0.006 * (1.0 - dot(n, uSunDir)), 0.0015);
+                float current = p.z - bias;
+                vec2 ts = 1.0 / textureSize(uShadowMap, 0);
+                float sh = 0.0;
+                for (int x = -1; x <= 1; x++) {
+                    for (int y = -1; y <= 1; y++) {
+                        float d = texture(uShadowMap, p.xy + vec2(x, y) * ts).r;
+                        sh += current > d ? 0.0 : 1.0;
+                    }
+                }
+                return sh / 9.0;
+            }
+
+            void main() {
+                vec4 tex = texture(uTexture, vTexCoord);
+                if (tex.a < 0.1) discard;
+
+                vec3 n = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
+                if (!gl_FrontFacing) n = -n;
+                float diff = max(dot(n, uSunDir), 0.0);
+
+                float shadow = 1.0;
+                if (diff > 0.0) shadow = shadowCalc(uLightVP * vec4(vWorld, 1.0), n);
+
+                vec3 lit = tex.rgb * (uAmbient + uSunColor * diff * shadow);
+                float dist = length(vWorld - uCamPos);
+                float fog = 1.0 - exp(-pow(dist * uFogDensity, 2.0));
+                lit = mix(lit, uFogColor, fog);
+                FragColor = vec4(lit, tex.a);
+            }
+            """;
+
+    private static final String SKIN_SHADOW_VERT = """
+            #version 330 core
+            layout (location = 0) in vec3 aPos;
+            layout (location = 1) in vec2 aTexCoord;
+            layout (location = 2) in vec4 aBoneIds;
+            layout (location = 3) in vec4 aWeights;
+
+            uniform mat4 uBones[6];
+            uniform mat4 uModel;
+            uniform mat4 uLightVP;
+
+            out vec2 vTexCoord;
+
+            void main() {
+                mat4 skin = aWeights.x * uBones[int(aBoneIds.x)]
+                          + aWeights.y * uBones[int(aBoneIds.y)]
+                          + aWeights.z * uBones[int(aBoneIds.z)]
+                          + aWeights.w * uBones[int(aBoneIds.w)];
+                vTexCoord = aTexCoord;
+                gl_Position = uLightVP * uModel * skin * vec4(aPos, 1.0);
+            }
+            """;
+
+    private static final String SKIN_SHADOW_FRAG = """
+            #version 330 core
+            in vec2 vTexCoord;
+            out vec4 FragColor;
+            uniform sampler2D uTexture;
+            void main() {
+                if (texture(uTexture, vTexCoord).a < 0.5) discard;
+            }
+            """;
+
+    // ---------------- состояние ----------------
+    private int vao, vbo, vertexCount;
     private final Texture texture;
     private final Vector3f pos;
-    private final float armCutArg;
-    private final float armDropAngle;
-    private final float shoulderArg;
-    private final float armStretchArg;
-    private final float heightWorld;
-    private final float seed;
+    private final float armCutArg, armDropAngle, shoulderArg, armStretchArg, heightWorld, seed;
 
     private float scale = 1f;
     private float armStretch = 1f;
+    private float armOut = 0f;
     private float walkSpeed;
 
     private final Random rng = new Random();
     private final Vector3f target = new Vector3f();
-    private float currentYaw = 0f;
-    private float time = 0f;
-    private float phase;
-    private float walkAmount = 0f;
-    private float idleTimer;
+    private float currentYaw = 0f, time = 0f, phase, walkAmount = 0f, idleTimer;
     private int lastStepIdx = 0;
 
     private final Matrix4f world = new Matrix4f();
-    private final Matrix4f upper = new Matrix4f();
-
-    private final Vector3f hipP  = new Vector3f();
-    private final Vector3f neckP = new Vector3f();
-    private final Vector3f shLP  = new Vector3f();
-    private final Vector3f shRP  = new Vector3f();
-    private final Vector3f hipLP = new Vector3f();
-    private final Vector3f hipRP = new Vector3f();
+    private final Matrix4f[] bones = new Matrix4f[NUM_BONES];
+    private final Vector3f hipP = new Vector3f(), neckP = new Vector3f();
+    private final Vector3f shLP = new Vector3f(), shRP = new Vector3f();
+    private final Vector3f hipLP = new Vector3f(), hipRP = new Vector3f();
 
     // ---------------- конструкторы (сигнатуры не менять) ----------------
 
@@ -139,11 +247,19 @@ public final class RiggedModel {
         this(objPath, texPath, x, z, targetHeight, armCutFrac, armDropAngle, shoulderFrac, armStretch, false);
     }
 
-    /** dropShelf оставлен для совместимости — полки больше не нужны, игнорируется. */
+    /** dropShelf оставлен для совместимости — игнорируется. */
     public RiggedModel(String objPath, String texPath, float x, float z, float targetHeight,
                        float armCutFrac, float armDropAngle, float shoulderFrac,
                        float armStretch, boolean dropShelf) {
         loadConfig();
+        if (skinShader == null) {
+            skinShader = new ShaderProgram(SKIN_VERT, SKIN_FRAG);
+            skinShadowShader = new ShaderProgram(SKIN_SHADOW_VERT, SKIN_SHADOW_FRAG);
+        }
+        shaderUsers++;
+
+        for (int i = 0; i < NUM_BONES; i++) bones[i] = new Matrix4f();
+
         this.pos = new Vector3f(x, Ground.getHeightAt(x, z), z);
         this.texture = texPath != null ? new Texture(texPath, false, false) : null;
         this.armCutArg     = armCutFrac;
@@ -161,10 +277,10 @@ public final class RiggedModel {
 
         System.out.println("[RIG] " + new File(objPath).getName()
                 + " h=" + modelHeight + " scale=" + scale
-                + " drop=" + armDropAngle + " armStretch=" + this.armStretch);
+                + " stretch=" + armStretch + " out=" + armOut);
 
         pickNewTarget();
-        updateMatrices();
+        updateBones();
     }
 
     // ---------------- конфиг ----------------
@@ -184,22 +300,31 @@ public final class RiggedModel {
                 int eq = line.indexOf('=');
                 if (eq < 0) continue;
                 String k = line.substring(0, eq).trim();
+                String raw = line.substring(eq + 1).trim();
+                if (k.startsWith("out_")) {
+                    try { OUT_OVERRIDES.put(k.substring(4).toLowerCase(), Float.parseFloat(raw)); }
+                    catch (NumberFormatException ignored) { }
+                    continue;
+                }
                 float v;
-                try { v = Float.parseFloat(line.substring(eq + 1).trim()); }
-                catch (NumberFormatException e) { continue; }
+                try { v = Float.parseFloat(raw); } catch (NumberFormatException e) { continue; }
                 switch (k) {
                     case "auto_rig"       -> AUTO_RIG = v > 0.5f;
                     case "neck_y"         -> NECK_FRAC = v;
                     case "hip_y"          -> HIP_FRAC = v;
                     case "shoulder_y"     -> SHOULDER_FRAC = v;
                     case "arm_x"          -> ARM_CUT_FRAC = v;
-                    case "leg_x"          -> LEG_PIVOT_FRAC = v;
                     case "fingertip_y"    -> FINGERTIP_FRAC = v;
                     case "arm_stretch"    -> ARM_STRETCH_CFG = v;
                     case "arm_band_ratio" -> ARM_BAND_RATIO = v;
                     case "arm_margin"     -> ARM_MARGIN = v;
                     case "arm_band_pad"   -> ARM_BAND_PAD = v;
                     case "leg_gap"        -> LEG_GAP = v;
+                    case "arm_out"        -> ARM_OUT_CFG = v;
+                    case "arm_out_margin" -> ARM_OUT_MARGIN = v;
+                    case "arm_out_max"    -> ARM_OUT_MAX = v;
+                    case "blend_x"        -> BLEND_X = v;
+                    case "blend_y"        -> BLEND_Y = v;
                     case "leg_swing"      -> LEG_AMP = v;
                     case "arm_swing"      -> ARM_AMP = v;
                     case "bob"            -> BOB_AMP = v;
@@ -216,25 +341,42 @@ public final class RiggedModel {
                     default -> { }
                 }
             }
-            System.out.println("[RIG] config: auto_rig=" + AUTO_RIG + " fingertip_y=" + FINGERTIP_FRAC);
+            System.out.println("[RIG] config: auto_rig=" + AUTO_RIG
+                    + " fingertip_y=" + FINGERTIP_FRAC + " arm_out=" + ARM_OUT_CFG);
         } catch (Exception e) {
             System.err.println("[RIG] ошибка чтения " + CFG_PATH + ": " + e.getMessage());
         }
     }
 
-    // ---------------- загрузка ----------------
+    private static float outOverrideFor(String path) {
+        String n = new File(path).getName().toLowerCase();
+        for (Map.Entry<String, Float> e : OUT_OVERRIDES.entrySet())
+            if (n.contains(e.getKey())) return e.getValue();
+        return Float.NaN;
+    }
+
+    // ---------------- утилиты ----------------
 
     private static int idx(String s, int total) {
         int i = Integer.parseInt(s);
         return i < 0 ? total + i : i - 1;
     }
 
+    /** smoothstep, работает и при e1 < e0 (обратный фронт). */
+    private static float sstep(float e0, float e1, float v) {
+        if (Math.abs(e1 - e0) < 1e-9f) return v >= e1 ? 1f : 0f;
+        float t = (v - e0) / (e1 - e0);
+        t = Math.max(0f, Math.min(1f, t));
+        return t * t * (3f - 2f * t);
+    }
+
+    // ---------------- загрузка + скининг ----------------
+
     private float loadObj(String path) {
         List<Float> verts = new ArrayList<>();
         List<Float> uvs   = new ArrayList<>();
-        Map<String, List<Integer>> pv = new LinkedHashMap<>();
-        Map<String, List<Integer>> pu = new LinkedHashMap<>();
-        for (String n : NAMES) { pv.put(n, new ArrayList<>()); pu.put(n, new ArrayList<>()); }
+        List<Integer> fvAll = new ArrayList<>();
+        List<Integer> fuAll = new ArrayList<>();
 
         float minX = Float.MAX_VALUE, maxX = -Float.MAX_VALUE;
         float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
@@ -257,23 +399,35 @@ public final class RiggedModel {
                 } else if (t[0].equals("vt") && t.length >= 3) {
                     uvs.add(Float.parseFloat(t[1]));
                     uvs.add(Float.parseFloat(t[2]));
+                } else if (t[0].equals("f") && t.length >= 4) {
+                    List<Integer> fv = new ArrayList<>(), fu = new ArrayList<>();
+                    for (int i = 1; i < t.length; i++) {
+                        String[] sub = t[i].split("/");
+                        fv.add(idx(sub[0], verts.size() / 3));
+                        fu.add(sub.length > 1 && !sub[1].isEmpty() ? idx(sub[1], uvs.size() / 2) : 0);
+                    }
+                    for (int i = 1; i < fv.size() - 1; i++) {
+                        fvAll.add(fv.get(0));   fuAll.add(fu.get(0));
+                        fvAll.add(fv.get(i));   fuAll.add(fu.get(i));
+                        fvAll.add(fv.get(i+1)); fuAll.add(fu.get(i+1));
+                    }
                 }
             }
         } catch (Exception e) {
             System.err.println("[RIG] Failed to load OBJ: " + e.getMessage());
             return 1f;
         }
-        if (verts.isEmpty()) return 1f;
+        if (verts.isEmpty() || fvAll.isEmpty()) return 1f;
 
         float height  = Math.max(maxY - minY, 0.01f);
         float width   = Math.max(maxX - minX, 0.01f);
         float centerX = (minX + maxX) / 2f;
         float centerZ = (minZ + maxZ) / 2f;
 
-        // ================= ПРОФИЛЬ МЕША =================
+        // ---------- профиль меша ----------
         final int NB = 160;
-        float[] halfW  = new float[NB];              // max |x| в слое
-        float[] minAbs = new float[NB];              // min |x| в слое (щель между ног)
+        float[] halfW  = new float[NB];
+        float[] minAbs = new float[NB];
         int[]   cnt    = new int[NB];
         Arrays.fill(minAbs, Float.MAX_VALUE);
         for (int i = 0; i < verts.size(); i += 3) {
@@ -285,48 +439,41 @@ public final class RiggedModel {
             cnt[b]++;
         }
 
-        float neckY, shoulderY, armpitY, armCutX, legCutY;
+        float neckY, shoulderY, armpitY, armTopY, armCutX, legCutY;
 
         if (AUTO_RIG) {
-            // 1) полоса рук = самая широкая часть ВЫШЕ середины роста
             int peak = NB / 2;
             for (int b = NB / 2; b < NB; b++) if (cnt[b] > 0 && halfW[b] > halfW[peak]) peak = b;
-            float maxHalf = Math.max(halfW[peak], 1e-4f);
-            float thr = ARM_BAND_RATIO * maxHalf;
+            float thr = ARM_BAND_RATIO * Math.max(halfW[peak], 1e-4f);
 
             int down = peak;
             while (down > 0 && (cnt[down] == 0 || halfW[down] >= thr)) down--;
             int up = peak;
             while (up < NB - 1 && (cnt[up] == 0 || halfW[up] >= thr)) up++;
 
-            armpitY   = (down + 0.5f) / NB * height;
-            float armTopY = (up + 0.5f) / NB * height;
+            armpitY = (down + 0.5f) / NB * height;
+            armTopY = (up + 0.5f) / NB * height;
             shoulderY = (armpitY + armTopY) * 0.5f;
 
-            // 2) рез плеча = край торса сразу под подмышкой
             float torsoHalf = 0f;
             int from = Math.max(0, down - (int) (0.10f * NB));
             for (int b = from; b <= down; b++) torsoHalf = Math.max(torsoHalf, halfW[b]);
             armCutX = torsoHalf * ARM_MARGIN;
-            if (armCutX < 0.04f * width || armCutX > 0.40f * width) {   // детект не удался
-                armCutX = width * (armCutArg > 0f ? armCutArg : ARM_CUT_FRAC);
+            if (armCutX < 0.04f * width || armCutX > 0.40f * width) {
+                armCutX   = width * (armCutArg > 0f ? armCutArg : ARM_CUT_FRAC);
                 shoulderY = (shoulderArg > 0f ? shoulderArg : SHOULDER_FRAC) * height;
-                armpitY = shoulderY - 0.10f * height;
+                armpitY   = shoulderY - 0.10f * height;
+                armTopY   = shoulderY + 0.05f * height;
                 System.out.println("[RIG] auto-detect плеча не удался — fallback");
             }
 
-            // 3) шея = самое узкое место между головой и плечами
-            int neckBin = -1;
-            float best = Float.MAX_VALUE;
-            for (int b = (int) (0.72f * NB); b < (int) (0.94f * NB); b++) {
+            int neckBin = -1; float best = Float.MAX_VALUE;
+            for (int b = (int) (0.72f * NB); b < (int) (0.94f * NB); b++)
                 if (cnt[b] > 0 && halfW[b] < best) { best = halfW[b]; neckBin = b; }
-            }
             neckY = neckBin >= 0 ? (neckBin + 0.5f) / NB * height : NECK_FRAC * height;
             if (neckY <= shoulderY) neckY = Math.min(0.93f * height, shoulderY + 0.06f * height);
 
-            // 4) промежность = самый верхний слой с щелью между ног
-            int hipBin = (int) (HIP_FRAC * NB);
-            int gapBin = -1;
+            int hipBin = (int) (HIP_FRAC * NB), gapBin = -1;
             for (int b = 1; b <= hipBin; b++)
                 if (cnt[b] > 0 && minAbs[b] > LEG_GAP * width) gapBin = b;
             legCutY = gapBin >= 0 ? (gapBin + 1.0f) / NB * height
@@ -337,65 +484,21 @@ public final class RiggedModel {
             shoulderY = (shoulderArg > 0f ? shoulderArg : SHOULDER_FRAC) * height;
             armCutX   = width * (armCutArg > 0f ? armCutArg : ARM_CUT_FRAC);
             armpitY   = shoulderY - 0.10f * height;
+            armTopY   = shoulderY + 0.05f * height;
             legCutY   = (HIP_FRAC - PELVIS_MARGIN) * height;
         }
 
-        float armBandLow  = armpitY - ARM_BAND_PAD * height;
-        float legPivotX   = width * LEG_PIVOT_FRAC;
-        float worldNeckY  = minY + neckY;
-        float worldBandY  = minY + armBandLow;
-        float worldLegY   = minY + legCutY;
+        float armBandLow = armpitY - ARM_BAND_PAD * height;
+        float bandX = BLEND_X * width;
+        float bandY = BLEND_Y * height;
 
-        System.out.printf("[RIG] auto: neck=%.3f shoulder=%.3f armpit=%.3f armCut=%.3fW legCut=%.3f%n",
-                neckY / height, shoulderY / height, armpitY / height, armCutX / width, legCutY / height);
-
-        // ================= РАЗБОР ГРАНЕЙ =================
-        float tipR = -Float.MAX_VALUE, tipL = Float.MAX_VALUE;
-        try (BufferedReader br = new BufferedReader(new FileReader(path))) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                line = line.trim();
-                if (line.isEmpty() || line.charAt(0) == '#') continue;
-                String[] t = line.split("\\s+");
-                if (!t[0].equals("f") || t.length < 4) continue;
-
-                List<Integer> fv = new ArrayList<>();
-                List<Integer> fu = new ArrayList<>();
-                for (int i = 1; i < t.length; i++) {
-                    String[] sub = t[i].split("/");
-                    fv.add(idx(sub[0], verts.size() / 3));
-                    fu.add(sub.length > 1 && !sub[1].isEmpty() ? idx(sub[1], uvs.size() / 2) : 0);
-                }
-
-                float cx = 0, cy = 0;
-                for (int v : fv) { cx += verts.get(v * 3); cy += verts.get(v * 3 + 1); }
-                cx /= fv.size(); cy /= fv.size();
-
-                String part;
-                if (cy > worldNeckY)                                   part = "Head";
-                else if (cy > worldBandY && cx < -armCutX)             part = "ArmL";
-                else if (cy > worldBandY && cx >  armCutX)             part = "ArmR";
-                else if (cy > worldLegY)                               part = "Torso";
-                else                                                   part = cx < 0 ? "LegL" : "LegR";
-
-                if (part.equals("ArmR")) for (int v : fv) tipR = Math.max(tipR, verts.get(v * 3));
-                if (part.equals("ArmL")) for (int v : fv) tipL = Math.min(tipL, verts.get(v * 3));
-
-                List<Integer> lv = pv.get(part), lu = pu.get(part);
-                for (int i = 1; i < fv.size() - 1; i++) {
-                    lv.add(fv.get(0));   lu.add(fu.get(0));
-                    lv.add(fv.get(i));   lu.add(fu.get(i));
-                    lv.add(fv.get(i+1)); lu.add(fu.get(i+1));
-                }
-            }
-        } catch (Exception e) {
-            System.err.println("[RIG] ошибка разбора граней: " + e.getMessage());
+        // ---------- длина руки ----------
+        float tip = 0f;
+        for (int i = 0; i < verts.size(); i += 3) {
+            float y = verts.get(i + 1) - minY;
+            if (y > armBandLow) tip = Math.max(tip, Math.abs(verts.get(i) - centerX));
         }
-
-        // ================= ДЛИНА РУКИ =================
-        float lenR = tipR > -Float.MAX_VALUE / 2 ? (tipR - centerX) - armCutX : 0f;
-        float lenL = tipL <  Float.MAX_VALUE / 2 ? (centerX - tipL) - armCutX : 0f;
-        float armLen = Math.max(lenR, lenL);
+        float armLen = tip - armCutX;
         if (armLen < 1e-4f) armLen = (maxX - centerX) - armCutX;
 
         float dropSin = (float) Math.abs(Math.sin(armDropAngle));
@@ -407,79 +510,108 @@ public final class RiggedModel {
         armStretch = manual > 0.01f ? manual : (armLen > 1e-4f ? needLen / armLen : 1f);
         armStretch = Math.max(0.6f, Math.min(2.2f, armStretch));
 
-        System.out.println("[RIG] armLen=" + armLen + " need=" + needLen + " -> stretch=" + armStretch);
+        // ---------- отступ руки наружу (чтобы не лезла в трусы) ----------
+        float ov = outOverrideFor(path);
+        if (!Float.isNaN(ov)) {
+            armOut = ov * width;
+        } else if (ARM_OUT_CFG >= 0f) {
+            armOut = ARM_OUT_CFG * width;
+        } else {
+            float handY = FINGERTIP_FRAC * height;
+            float bodyHalf = 0f;
+            for (int i = 0; i < verts.size(); i += 3) {
+                float y = verts.get(i + 1) - minY;
+                if (y >= handY - 0.02f * height && y <= handY + 0.14f * height)
+                    bodyHalf = Math.max(bodyHalf, Math.abs(verts.get(i) - centerX));
+            }
+            float armThick = Math.max(armTopY - armpitY, 0.02f * height);
+            float innerEdge = armCutX - armThick * 0.5f;
+            armOut = bodyHalf + ARM_OUT_MARGIN * width - innerEdge;
+            armOut = Math.max(0f, Math.min(armOut, ARM_OUT_MAX * width));
+        }
+
+        System.out.printf("[RIG] auto: neck=%.3f shoulder=%.3f armpit=%.3f armCut=%.3fW legCut=%.3f%n",
+                neckY / height, shoulderY / height, armpitY / height, armCutX / width, legCutY / height);
+        System.out.println("[RIG] armLen=" + armLen + " need=" + needLen
+                + " stretch=" + armStretch + " out=" + (armOut / width) + "W");
 
         hipP.set(0, legCutY, 0);
         neckP.set(0, neckY, 0);
         shLP.set(-armCutX, shoulderY, 0);
         shRP.set( armCutX, shoulderY, 0);
-        hipLP.set(-legPivotX, legCutY, 0);   // pivotY == линия реза -> шов не рвётся
-        hipRP.set( legPivotX, legCutY, 0);
+        hipLP.set(0, legCutY, 0);
+        hipRP.set(0, legCutY, 0);
 
-        // ================= БУФЕРЫ =================
-        for (String name : NAMES) {
-            List<Integer> vi = pv.get(name);
-            List<Integer> ui = pu.get(name);
-            if (vi.isEmpty()) { System.out.println("[RIG] WARNING: part " + name + " EMPTY"); continue; }
+        // ---------- сборка вершин: rest-поза + веса ----------
+        vertexCount = fvAll.size();
+        float[] data = new float[vertexCount * 13];
+        int o = 0;
+        for (int i = 0; i < vertexCount; i++) {
+            int v  = fvAll.get(i) * 3;
+            int uv = fuAll.get(i) * 2;
 
-            Part p = new Part();
-            p.name = name;
-            p.count = vi.size();
-            p.pivot = switch (name) {
-                case "Head"  -> new Vector3f(neckP);
-                case "Torso" -> new Vector3f(hipP);
-                case "ArmL"  -> new Vector3f(shLP);
-                case "ArmR"  -> new Vector3f(shRP);
-                case "LegL"  -> new Vector3f(hipLP);
-                case "LegR"  -> new Vector3f(hipRP);
-                default      -> new Vector3f(0, 0, 0);
-            };
+            float x = verts.get(v)     - centerX;
+            float y = verts.get(v + 1) - minY;
+            float z = verts.get(v + 2) - centerZ;
+            float ax = Math.abs(x);
+            boolean right = x >= 0f;
 
-            boolean isArm = name.equals("ArmL") || name.equals("ArmR");
-            float[] data = new float[p.count * 5];
-            for (int i = 0; i < p.count; i++) {
-                int v  = vi.get(i) * 3;
-                int uv = ui.get(i) * 2;
+            // --- веса: разбиение единицы ---
+            float wHead = sstep(neckY - bandY, neckY + bandY, y);
+            float wArm  = sstep(armCutX - bandX, armCutX + bandX, ax)
+                        * sstep(armBandLow - bandY, armBandLow + bandY, y)
+                        * (1f - wHead);
+            float wLeg  = sstep(legCutY + bandY, legCutY - bandY, y) * (1f - wHead) * (1f - wArm);
+            float wTorso = Math.max(0f, 1f - wHead - wArm - wLeg);
 
-                float x = verts.get(v)     - centerX;
-                float y = verts.get(v + 1) - minY;
-                float z = verts.get(v + 2) - centerZ;
-
-                if (isArm) {
-                    float d = x - p.pivot.x;
-                    boolean outward = name.equals("ArmR") ? d > 0f : d < 0f;
-                    if (outward) x = p.pivot.x + d * armStretch;
-                }
-
-                data[i*5]     = x;
-                data[i*5 + 1] = y;
-                data[i*5 + 2] = z;
-                data[i*5 + 3] = uv + 1 < uvs.size() ? uvs.get(uv)     : 0f;
-                data[i*5 + 4] = uv + 1 < uvs.size() ? uvs.get(uv + 1) : 0f;
+            // --- rest-поза: длина и отступ руки, ОБЯЗАТЕЛЬНО * вес ---
+            if (wArm > 0f) {
+                float pivotX = right ? armCutX : -armCutX;
+                float d = x - pivotX;
+                boolean outward = right ? d > 0f : d < 0f;
+                if (outward) x = pivotX + d * (1f + (armStretch - 1f) * wArm);
+                x += (right ? armOut : -armOut) * wArm;
             }
 
-            p.vao = GL30.glGenVertexArrays();
-            GL30.glBindVertexArray(p.vao);
-            p.vbo = GL15.glGenBuffers();
-            GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, p.vbo);
-            FloatBuffer buf = MemoryUtil.memAllocFloat(data.length);
-            try {
-                buf.put(data).flip();
-                GL15.glBufferData(GL15.GL_ARRAY_BUFFER, buf, GL15.GL_STATIC_DRAW);
-            } finally {
-                MemoryUtil.memFree(buf);
-            }
-            int stride = 5 * Float.BYTES;
-            GL20.glVertexAttribPointer(0, 3, GL11.GL_FLOAT, false, stride, 0L);
-            GL20.glEnableVertexAttribArray(0);
-            GL20.glVertexAttribPointer(1, 2, GL11.GL_FLOAT, false, stride, 3L * Float.BYTES);
-            GL20.glEnableVertexAttribArray(1);
-            GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
-            GL30.glBindVertexArray(0);
-
-            parts.add(p);
-            System.out.println("[RIG]   " + name + ": " + p.count + " вершин");
+            data[o++] = x;
+            data[o++] = y;
+            data[o++] = z;
+            data[o++] = uv + 1 < uvs.size() ? uvs.get(uv)     : 0f;
+            data[o++] = uv + 1 < uvs.size() ? uvs.get(uv + 1) : 0f;
+            data[o++] = B_TORSO;
+            data[o++] = B_HEAD;
+            data[o++] = right ? B_ARM_R : B_ARM_L;
+            data[o++] = right ? B_LEG_R : B_LEG_L;
+            data[o++] = wTorso;
+            data[o++] = wHead;
+            data[o++] = wArm;
+            data[o++] = wLeg;
         }
+
+        vao = GL30.glGenVertexArrays();
+        GL30.glBindVertexArray(vao);
+        vbo = GL15.glGenBuffers();
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, vbo);
+        FloatBuffer buf = MemoryUtil.memAllocFloat(data.length);
+        try {
+            buf.put(data).flip();
+            GL15.glBufferData(GL15.GL_ARRAY_BUFFER, buf, GL15.GL_STATIC_DRAW);
+        } finally {
+            MemoryUtil.memFree(buf);
+        }
+        int stride = 13 * Float.BYTES;
+        GL20.glVertexAttribPointer(0, 3, GL11.GL_FLOAT, false, stride, 0L);
+        GL20.glEnableVertexAttribArray(0);
+        GL20.glVertexAttribPointer(1, 2, GL11.GL_FLOAT, false, stride, 3L * Float.BYTES);
+        GL20.glEnableVertexAttribArray(1);
+        GL20.glVertexAttribPointer(2, 4, GL11.GL_FLOAT, false, stride, 5L * Float.BYTES);
+        GL20.glEnableVertexAttribArray(2);
+        GL20.glVertexAttribPointer(3, 4, GL11.GL_FLOAT, false, stride, 9L * Float.BYTES);
+        GL20.glEnableVertexAttribArray(3);
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        GL30.glBindVertexArray(0);
+
+        System.out.println("[RIG] skinned verts=" + vertexCount + " (меш цельный, швов нет)");
         return height;
     }
 
@@ -511,9 +643,8 @@ public final class RiggedModel {
             float yawDiff = targetYaw - currentYaw;
             while (yawDiff >  Math.PI) yawDiff -= (float) (Math.PI * 2);
             while (yawDiff < -Math.PI) yawDiff += (float) (Math.PI * 2);
-            float turn = yawDiff * Math.min(1f, dt * 6f);
-            float maxTurn = TURN_RATE * dt;
-            turn = Math.max(-maxTurn, Math.min(maxTurn, turn));
+            float turn = Math.max(-TURN_RATE * dt,
+                    Math.min(TURN_RATE * dt, yawDiff * Math.min(1f, dt * 6f)));
             currentYaw += turn;
 
             float nearSlow = Math.max(0.25f, Math.min(1f, dist / 1.2f));
@@ -539,22 +670,20 @@ public final class RiggedModel {
         }
 
         walkAmount += ((moving ? 1f : 0f) - walkAmount) * Math.min(1f, dt * 5f);
+        pos.y += (Ground.getHeightAt(pos.x, pos.z) - pos.y) * Math.min(1f, dt * 12f);
 
-        float gy = Ground.getHeightAt(pos.x, pos.z);
-        pos.y += (gy - pos.y) * Math.min(1f, dt * 12f);
-
-        updateMatrices();
+        updateBones();
     }
 
-    private static void rot(Part p, Matrix4f base, Vector3f pivot, float rx, float ry, float rz) {
-        p.mat.set(base).translate(pivot);
-        if (ry != 0f) p.mat.rotateY(ry);
-        if (rx != 0f) p.mat.rotateX(rx);
-        if (rz != 0f) p.mat.rotateZ(rz);
-        p.mat.translate(-pivot.x, -pivot.y, -pivot.z);
+    private static void around(Matrix4f m, Vector3f p, float rx, float ry, float rz) {
+        m.translate(p);
+        if (ry != 0f) m.rotateY(ry);
+        if (rx != 0f) m.rotateX(rx);
+        if (rz != 0f) m.rotateZ(rz);
+        m.translate(-p.x, -p.y, -p.z);
     }
 
-    private void updateMatrices() {
+    private void updateBones() {
         float w = walkAmount;
         float s = (float) Math.sin(phase);
 
@@ -568,58 +697,86 @@ public final class RiggedModel {
              .rotateZ(sway)
              .scale(scale);
 
-        upper.set(world)
-             .translate(hipP)
-             .rotateX(lean)
-             .translate(-hipP.x, -hipP.y, -hipP.z);
+        // торс
+        bones[B_TORSO].identity();
+        around(bones[B_TORSO], hipP, lean, 0f, 0f);
 
-        float legL =  s * LEG_AMP * w;
-        float legR = -s * LEG_AMP * w;
+        // голова — наследует торс
+        float lookYaw   = (float) Math.sin(time * 0.40f + seed) * 0.45f * (1f - 0.7f * w);
+        float lookPitch = (float) Math.sin(time * 0.27f + seed * 1.7f) * 0.08f * (1f - 0.5f * w) - lean * 0.7f;
+        bones[B_HEAD].set(bones[B_TORSO]);
+        around(bones[B_HEAD], neckP, lookPitch, lookYaw, 0f);
+
+        // руки — наследуют торс
         float armL = -s * ARM_AMP * w;
         float armR =  s * ARM_AMP * w;
         float drop = Math.max(0f, armDropAngle);
+        bones[B_ARM_L].set(bones[B_TORSO]);
+        around(bones[B_ARM_L], shLP, -armL, 0f,  drop);
+        bones[B_ARM_R].set(bones[B_TORSO]);
+        around(bones[B_ARM_R], shRP, -armR, 0f, -drop);
 
-        float lookYaw   = (float) Math.sin(time * 0.40f + seed) * 0.45f * (1f - 0.7f * w);
-        float lookPitch = (float) Math.sin(time * 0.27f + seed * 1.7f) * 0.08f * (1f - 0.5f * w) - lean * 0.7f;
-
-        for (Part p : parts) {
-            switch (p.name) {
-                case "Torso" -> p.mat.set(upper);
-                case "Head"  -> rot(p, upper, neckP, lookPitch, lookYaw, 0f);
-                case "ArmL"  -> rot(p, upper, shLP, -armL, 0f,  drop);
-                case "ArmR"  -> rot(p, upper, shRP, -armR, 0f, -drop);
-                case "LegL"  -> rot(p, world, hipLP, -legL, 0f, 0f);
-                case "LegR"  -> rot(p, world, hipRP, -legR, 0f, 0f);
-                default      -> p.mat.set(world);
-            }
-        }
+        // ноги — без наклона корпуса
+        float legL =  s * LEG_AMP * w;
+        float legR = -s * LEG_AMP * w;
+        bones[B_LEG_L].identity();
+        around(bones[B_LEG_L], hipLP, -legL, 0f, 0f);
+        bones[B_LEG_R].identity();
+        around(bones[B_LEG_R], hipRP, -legR, 0f, 0f);
     }
 
     // ---------------- рендер ----------------
 
-    public void render(ShaderProgram shader, Matrix4f view, Matrix4f proj) {
-        shader.setUniform("uView", view);
-        shader.setUniform("uProjection", proj);
+    public void render(Matrix4f view, Matrix4f proj, Matrix4f lightVP, int shadowTex,
+                       Vector3f sunDir, Vector3f sunColor, Vector3f ambient,
+                       Vector3f camPos, Vector3f fogColor, float fogDensity) {
+        if (vao == 0) return;
+
+        skinShader.bind();
+        skinShader.setUniform("uBones", bones);
+        skinShader.setUniform("uModel", world);
+        skinShader.setUniform("uView", view);
+        skinShader.setUniform("uProjection", proj);
+        skinShader.setUniform("uLightVP", lightVP);
+        skinShader.setUniform1i("uTexture", 0);
+        skinShader.setUniform1i("uShadowMap", 1);
+        skinShader.setUniform3f("uSunDir", sunDir.x, sunDir.y, sunDir.z);
+        skinShader.setUniform3f("uSunColor", sunColor.x, sunColor.y, sunColor.z);
+        skinShader.setUniform3f("uAmbient", ambient.x, ambient.y, ambient.z);
+        skinShader.setUniform3f("uCamPos", camPos.x, camPos.y, camPos.z);
+        skinShader.setUniform3f("uFogColor", fogColor.x, fogColor.y, fogColor.z);
+        skinShader.setUniform1f("uFogDensity", fogDensity);
+
+        GL13.glActiveTexture(GL13.GL_TEXTURE1);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, shadowTex);
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
         if (texture != null) texture.bind();
-        for (Part p : parts) {
-            shader.setUniform("uModel", p.mat);
-            GL30.glBindVertexArray(p.vao);
-            GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, p.count);
-        }
+
+        GL30.glBindVertexArray(vao);
+        GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, vertexCount);
         GL30.glBindVertexArray(0);
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+        skinShader.unbind();
     }
 
-    public void renderShadow(ShaderProgram shadowShader, Matrix4f lightVP) {
-        shadowShader.setUniform("uLightVP", lightVP);
+    /** Вызывать внутри shadow-прохода. */
+    public void renderShadow(Matrix4f lightVP) {
+        if (vao == 0) return;
+
+        skinShadowShader.bind();
+        skinShadowShader.setUniform("uBones", bones);
+        skinShadowShader.setUniform("uModel", world);
+        skinShadowShader.setUniform("uLightVP", lightVP);
+        skinShadowShader.setUniform1i("uTexture", 0);
+
+        GL13.glActiveTexture(GL13.GL_TEXTURE0);
         if (texture != null) texture.bind();
-        for (Part p : parts) {
-            shadowShader.setUniform("uModel", p.mat);
-            GL30.glBindVertexArray(p.vao);
-            GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, p.count);
-        }
+
+        GL30.glBindVertexArray(vao);
+        GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, vertexCount);
         GL30.glBindVertexArray(0);
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+        skinShadowShader.unbind();
     }
 
     public Vector3f position() { return pos; }
@@ -627,11 +784,18 @@ public final class RiggedModel {
     public void setWalkSpeed(float v) { walkSpeed = v; }
 
     public void destroy() {
-        for (Part p : parts) {
-            GL15.glDeleteBuffers(p.vbo);
-            GL30.glDeleteVertexArrays(p.vao);
+        if (vao != 0) {
+            GL15.glDeleteBuffers(vbo);
+            GL30.glDeleteVertexArrays(vao);
+            vao = 0;
         }
-        parts.clear();
         if (texture != null) texture.destroy();
+        if (--shaderUsers <= 0 && skinShader != null) {
+            skinShader.destroy();
+            skinShadowShader.destroy();
+            skinShader = null;
+            skinShadowShader = null;
+            shaderUsers = 0;
+        }
     }
 }
