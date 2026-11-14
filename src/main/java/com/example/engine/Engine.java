@@ -386,7 +386,9 @@ public final class Engine {
             eaters.add(new Eater(Eater.Type.TEEN, greenTribe.center.x + 2f, greenTribe.center.z + 2f, greenTribe, npcRng));
         }
         camera.snapToGround();
-        SpawnMenu spawnMenu = new SpawnMenu(typeTex, poopIcon, brightPoopIcon);
+        
+        SpawnMenu spawnMenu = new SpawnMenu(typeTex, peopleTex, poopIcon, brightPoopIcon);
+        
         float lastTime = (float) GLFW.glfwGetTime();
         boolean tabWasPressed = false, qWasPressed = false, escWasPressed = false;
         boolean upWasPressed = false, downWasPressed = false, leftWasPressed = false;
@@ -681,6 +683,21 @@ public final class Engine {
         return new float[]{ x, y, z };
     }
 
+    private static void spawnRigged(List<RiggedModel> list, String obj, String tex,
+                                    float x, float z, float height) {
+        if (!new File(obj).exists()) {
+            System.err.println("[SPAWN] нет файла: " + obj);
+            return;
+        }
+        try {
+            // armCut = -1 -> авто-детект плеча по мешу
+            list.add(new RiggedModel(obj, tex, x, z, height, -1f, 1.57f, 0.80f, 1.0f, false));
+            System.out.println("[SPAWN] " + new File(obj).getName());
+        } catch (Exception e) {
+            System.err.println("[SPAWN] " + obj + ": " + e.getMessage());
+        }
+    }
+
     private static void spawnFromMenu(SpawnMenu.Action action, Camera camera,
                                       List<Poop> poops, List<Eater> eaters, Random rng,
                                       List<Tribe> tribes, List<RiggedModel> riggedModels) {
@@ -692,6 +709,7 @@ public final class Engine {
         float sx = sp[0], sy = sp[1], sz = sp[2];
         if (sy < Ground.WATER_LEVEL + 0.5f) return;
         Tribe randomTribe = tribes.get(rng.nextInt(tribes.size()));
+        
         switch (action) {
             case SPAWN_TEEN -> eaters.add(new Eater(Eater.Type.TEEN, sx, sz, randomTribe, rng));
             case SPAWN_FAT -> eaters.add(new Eater(Eater.Type.FAT, sx, sz, randomTribe, rng));
@@ -700,8 +718,10 @@ public final class Engine {
             case SPAWN_PREGNANT -> eaters.add(new Eater(Eater.Type.PREGNANT, sx, sz, randomTribe, rng));
             case SPAWN_BABY -> eaters.add(new Eater(Eater.Type.BABY, sx, sz, randomTribe, rng));
             case SPAWN_YOUNG_BOY -> eaters.add(new Eater(Eater.Type.YOUNG_BOY, sx, sz, randomTribe, rng));
+            
             case SPAWN_POOP -> poops.add(Poop.random(sx, sz, rng));
             case SPAWN_BRIGHT_POOP -> poops.add(Poop.bright(sx, sz, rng));
+            
             case SPAWN_POOP_CLUSTER -> {
                 for (int i = 0; i < 5; i++) {
                     float a = rng.nextFloat() * (float) (Math.PI * 2);
@@ -731,39 +751,26 @@ public final class Engine {
                     eaters.add(new Eater(Eater.Type.TEEN, sx + (float) Math.cos(a) * r, sz + (float) Math.sin(a) * r, randomTribe, rng));
                 }
             }
-            case SPAWN_MRH_FEMALE -> {
-                String obj = "mesh/MrH/ww/womento.obj";
-                String tex = "mesh/MrH/ww/texture_21.png";
-                if (new File(obj).exists()) {
-                    try {
-                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 1.7f, 0.11f, 1.57f, 0.80f, 1.0f, false));
-                    } catch (Exception e) {
-                        System.err.println("[ERROR] Failed to load Female: " + e.getMessage());
-                    }
-                }
-            }
-            case SPAWN_MRH_KACHOK -> {
-                String obj = "mesh/MrH/kk/kachok.obj";
-                String tex = "mesh/MrH/kk/texture_84.png";
-                if (new File(obj).exists()) {
-                    try {
-                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 2.0f, 0.13f, 1.57f, 0.80f, 1.0f, false));
-                    } catch (Exception e) {
-                        System.err.println("[ERROR] Failed to load Kachok: " + e.getMessage());
-                    }
-                }
-            }
-            case SPAWN_MRH_TOLSTIY -> {
-                String obj = "mesh/MrH/tt/tolstiy.obj";
-                String tex = "mesh/MrH/tt/texture_115.png";
-                if (new File(obj).exists()) {
-                    try {
-                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 1.9f, 0.14f, 1.57f, 0.80f, 1.0f, false));
-                    } catch (Exception e) {
-                        System.err.println("[ERROR] Failed to load Tolstiy: " + e.getMessage());
-                    }
-                }
-            }
+            
+            case SPAWN_MRH_NORMIS -> spawnRigged(riggedModels,
+                    "mesh/MrH/meshy-model-2026-11-13T06-34-41-877Z(1).obj",
+                    "mesh/MrH/texture_21.png", sx, sz, 2.0f);
+            case SPAWN_MRH_FEMALE -> spawnRigged(riggedModels,
+                    "mesh/MrH/ww/womento.obj", "mesh/MrH/ww/texture_21.png", sx, sz, 1.7f);
+            case SPAWN_MRH_KACHOK -> spawnRigged(riggedModels,
+                    "mesh/MrH/kk/kachok.obj", "mesh/MrH/kk/texture_84.png", sx, sz, 2.0f);
+            case SPAWN_MRH_TOLSTIY -> spawnRigged(riggedModels,
+                    "mesh/MrH/tt/tolstiy.obj", "mesh/MrH/tt/texture_115.png", sx, sz, 1.9f);
+            case SPAWN_MRH_PUPS -> spawnRigged(riggedModels,
+                    "mesh/MrH/uu/pups.obj", "mesh/MrH/uu/texture_21.png", sx, sz, 1.0f);
+            case SPAWN_MRH_POLICE -> spawnRigged(riggedModels,
+                    "mesh/MrH/pp/police.obj", "mesh/MrH/pp/texture_21.png", sx, sz, 1.95f);
+            case SPAWN_MRH_COM -> spawnRigged(riggedModels,
+                    "mesh/MrH/cc/com.obj", "mesh/MrH/cc/texture_52.png", sx, sz, 1.9f);
+            case SPAWN_MRH_BEREM -> spawnRigged(riggedModels,
+                    "mesh/MrH/BB/berem.obj", "mesh/MrH/BB/texture_142.png", sx, sz, 1.7f);
+            case SPAWN_MRH_SOLDIER -> spawnRigged(riggedModels,
+                    "mesh/MrH/aa/ca.obj", "mesh/MrH/aa/texture_79.png", sx, sz, 1.95f);
         }
     }
 }
