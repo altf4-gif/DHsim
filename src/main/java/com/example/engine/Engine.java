@@ -302,7 +302,7 @@ public final class Engine {
         String mrhTexPath = "mesh/MrH/texture_21.png";
         if (new File(mrhObjPath).exists()) {
             try {
-                // Для MrH dropShelf=false (нормальные плечи)
+                // MrH: dropShelf=false
                 riggedModels.add(new RiggedModel(mrhObjPath, mrhTexPath, 10f, 10f, 2.0f, 0.11f, 1.57f, 0.80f, 1.0f, false));
                 System.out.println("  -> MrH loaded.");
             } catch (Exception e) {
@@ -736,7 +736,6 @@ public final class Engine {
                 String tex = "mesh/MrH/ww/texture_21.png";
                 if (new File(obj).exists()) {
                     try {
-                        // Для женщины dropShelf=false
                         riggedModels.add(new RiggedModel(obj, tex, sx, sz, 1.7f, 0.11f, 1.57f, 0.80f, 1.0f, false));
                     } catch (Exception e) {
                         System.err.println("[ERROR] Failed to load Female: " + e.getMessage());
@@ -748,8 +747,8 @@ public final class Engine {
                 String tex = "mesh/MrH/kk/texture_84.png";
                 if (new File(obj).exists()) {
                     try {
-                        // Качок: dropShelf=true (отрезаем широкую полку плеча)
-                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 2.0f, 0.13f, 1.57f, 0.80f, 1.0f, true));
+                        // Качок: dropShelf=false (плечо режется у сустава)
+                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 2.0f, 0.13f, 1.57f, 0.80f, 1.0f, false));
                     } catch (Exception e) {
                         System.err.println("[ERROR] Failed to load Kachok: " + e.getMessage());
                     }
@@ -760,8 +759,8 @@ public final class Engine {
                 String tex = "mesh/MrH/tt/texture_115.png";
                 if (new File(obj).exists()) {
                     try {
-                        // Толстяк: dropShelf=true (отрезаем широкую полку плеча)
-                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 1.9f, 0.14f, 1.57f, 0.80f, 1.0f, true));
+                        // Толстяк: dropShelf=false (плечо режется у сустава)
+                        riggedModels.add(new RiggedModel(obj, tex, sx, sz, 1.9f, 0.14f, 1.57f, 0.80f, 1.0f, false));
                     } catch (Exception e) {
                         System.err.println("[ERROR] Failed to load Tolstiy: " + e.getMessage());
                     }
